@@ -21,6 +21,7 @@ const loginAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: LOGIN_LOCKO
 
 const MAX_OTP_ATTEMPTS = 5;
 const otpAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: 5 * 60 * 1000 });
+const consumedOtpTokens = new MicroCache({ maxEntries: 2000, ttlMs: 3 * 60 * 1000 });
 
 const hashKey = (str) => crypto.createHash("sha256").update(String(str)).digest("hex").slice(0, 24);
 
@@ -406,6 +407,14 @@ export const verifyOtp = async (req, res, next) => {
         const cleanOtp = String(otp).trim();
         const tokenAttemptKey = hashKey(otpToken);
 
+        if (consumedOtpTokens.get(tokenAttemptKey)) {
+            return res.status(400).json({
+                success: false,
+                code: "OTP_ALREADY_USED",
+                message: "This verification code has already been used. Please request a new code if needed.",
+            });
+        }
+
         const prevOtpAttempts = otpAttemptsCache.get(tokenAttemptKey) || 0;
         if (prevOtpAttempts >= MAX_OTP_ATTEMPTS) {
             return res.status(429).json({
@@ -457,6 +466,7 @@ export const verifyOtp = async (req, res, next) => {
             });
         }
 
+        consumedOtpTokens.set(tokenAttemptKey, true);
         otpAttemptsCache.delete(tokenAttemptKey);
 
         // If purpose is signup, mark email verified; keep unapproved accounts blocked until Admin approves & classifies
@@ -691,6 +701,15 @@ export const resetPassword = async (req, res, next) => {
         }
 
         const tokenAttemptKey = hashKey(otpToken);
+
+        if (consumedOtpTokens.get(tokenAttemptKey)) {
+            return res.status(400).json({
+                success: false,
+                code: "OTP_ALREADY_USED",
+                message: "This reset code has already been used. Please request a new code if needed.",
+            });
+        }
+
         const prevOtpAttempts = otpAttemptsCache.get(tokenAttemptKey) || 0;
         if (prevOtpAttempts >= MAX_OTP_ATTEMPTS) {
             return res.status(429).json({
@@ -742,6 +761,7 @@ export const resetPassword = async (req, res, next) => {
             });
         }
 
+        consumedOtpTokens.set(tokenAttemptKey, true);
         otpAttemptsCache.delete(tokenAttemptKey);
         const passwordHash = await bcrypt.hash(newPassword, 12);
 
