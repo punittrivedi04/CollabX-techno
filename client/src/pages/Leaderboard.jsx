@@ -279,6 +279,7 @@ export default function Leaderboard() {
 
   // Submit project to leaderboard
   const handleSubmitProject = async (projectId) => {
+    if (submittingId) return;
     setSubmittingId(projectId);
     setError("");
     setSuccess("");
@@ -296,6 +297,7 @@ export default function Leaderboard() {
 
   // Withdraw project from leaderboard
   const handleWithdrawProject = async (projectId) => {
+    if (submittingId) return;
     if (!window.confirm("Withdraw this project from the College Leaderboard?")) return;
     setSubmittingId(projectId);
     setError("");

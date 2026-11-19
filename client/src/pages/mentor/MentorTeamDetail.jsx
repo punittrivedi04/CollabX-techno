@@ -119,6 +119,7 @@ export default function MentorTeamDetail() {
 
   const handleAssignTask = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -150,6 +151,7 @@ export default function MentorTeamDetail() {
 
   const handleSubmitProjectReview = async (e) => {
     e.preventDefault();
+    if (submittingReview) return;
     const reviewBody = projectReviewText.trim();
     if (!reviewBody || reviewBody.length < 5) {
       setError("Please provide a substantive review (minimum 5 characters).");

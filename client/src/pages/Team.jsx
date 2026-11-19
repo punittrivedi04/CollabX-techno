@@ -228,7 +228,7 @@ export default function Team() {
 
   const handleSendMentorInvitation = async (event) => {
     event.preventDefault();
-    if (!selectedMentorId || !selectedProjectId) return;
+    if (invitingMentor || !selectedMentorId || !selectedProjectId) return;
 
     setInvitingMentor(true);
     setError("");
@@ -243,6 +243,7 @@ export default function Team() {
       setSuccess(response.data.message);
       setSelectedMentorId("");
       await loadTeam();
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -251,7 +252,7 @@ export default function Team() {
   };
 
   const handleRemoveMentor = async () => {
-    if (!team?.mentor) return;
+    if (busy || !team?.mentor) return;
     const mentorName = toTitleCase(team.mentor.name) || "Faculty Mentor";
     if (
       !window.confirm(
@@ -270,6 +271,8 @@ export default function Team() {
       setSuccess(response.data.message);
       await loadTeam();
       await loadProjects();
+      window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
       window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
     } catch (err) {
@@ -282,7 +285,7 @@ export default function Team() {
   const handleSendInvitation = async (event) => {
     event.preventDefault();
 
-    if (!email.trim()) return;
+    if (busy || !email.trim()) return;
 
     setBusy(true);
     setError("");
@@ -298,6 +301,7 @@ export default function Team() {
       setEmail("");
 
       await loadTeam();
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -306,6 +310,7 @@ export default function Team() {
   };
 
   const handleCancelInvitation = async (invitation) => {
+    if (busy) return;
     if (
       !window.confirm("Cancel this invitation? The old link will stop working.")
     ) {
@@ -322,6 +327,7 @@ export default function Team() {
 
       setSuccess(response.data.message);
       await loadTeam();
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -330,6 +336,7 @@ export default function Team() {
   };
 
   const handleRemoveMember = async (member) => {
+    if (busy) return;
     if (!window.confirm(`Remove ${member.name} from this project?`)) {
       return;
     }
@@ -353,6 +360,7 @@ export default function Team() {
   };
 
   const handleLeaveProject = async () => {
+    if (busy) return;
     if (!window.confirm("Are you sure you want to leave this project?")) {
       return;
     }
@@ -365,6 +373,7 @@ export default function Team() {
       await loadProjects();
       setTeam(null);
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -373,6 +382,7 @@ export default function Team() {
   };
 
   const handleTransferOwnership = async () => {
+    if (busy) return;
     const mentorId = getId(team?.mentor);
     const eligibleMembers = members.filter(
       (member) =>
@@ -432,6 +442,8 @@ export default function Team() {
       setSuccess(response.data.message);
       await loadTeam();
       await loadProjects();
+      window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {

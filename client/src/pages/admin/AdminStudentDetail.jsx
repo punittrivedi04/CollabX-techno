@@ -59,7 +59,7 @@ export default function AdminStudentDetail() {
   }, [load]);
 
   const handleToggleStatus = async () => {
-    if (!data?.student) return;
+    if (saving || !data?.student) return;
     setSaving(true);
     setError("");
     try {
@@ -75,6 +75,7 @@ export default function AdminStudentDetail() {
   };
 
   const handlePromote = async () => {
+    if (saving) return;
     setSaving(true);
     setError("");
     try {

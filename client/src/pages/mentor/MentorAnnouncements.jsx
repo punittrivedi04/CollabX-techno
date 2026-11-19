@@ -53,6 +53,7 @@ export default function MentorAnnouncements() {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     setSuccess("");

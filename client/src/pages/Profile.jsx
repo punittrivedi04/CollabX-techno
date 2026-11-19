@@ -170,6 +170,7 @@ export default function Profile() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (saving) return;
 
     const cleanName = name.trim();
     if (!cleanName) {

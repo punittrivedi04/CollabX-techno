@@ -76,6 +76,7 @@ export default function Login() {
   // Handle Login Submit
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setErrorCode("");
     setSuccessMessage("");
@@ -96,6 +97,7 @@ export default function Login() {
   // Handle Send Reset OTP Submit
   const handleForgotEmailSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setErrorCode("");
     setLoading(true);
@@ -148,6 +150,7 @@ export default function Login() {
   // Handle Reset Password Submit
   const handleResetPasswordSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setErrorCode("");
 

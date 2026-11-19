@@ -76,6 +76,7 @@ export default function Register() {
   // Handle Register Form Submit (Step 1)
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setErrorCode("");
     setSuccessMessage("");
@@ -189,6 +190,7 @@ export default function Register() {
   // Verify OTP Submit (Step 2)
   const handleVerifyOtpSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setErrorCode("");
 

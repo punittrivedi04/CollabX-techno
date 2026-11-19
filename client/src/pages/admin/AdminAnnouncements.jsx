@@ -58,6 +58,7 @@ export default function AdminAnnouncements() {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -79,7 +80,7 @@ export default function AdminAnnouncements() {
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (saving || !deleteTarget) return;
     setSaving(true);
     setError("");
     setSuccess("");

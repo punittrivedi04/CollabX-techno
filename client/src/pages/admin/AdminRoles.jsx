@@ -143,7 +143,7 @@ export default function AdminRoles() {
   );
 
   const executeClassify = async () => {
-    if (!classifyAction) return;
+    if (saving || !classifyAction) return;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -166,7 +166,7 @@ export default function AdminRoles() {
   };
 
   const executePromote = async () => {
-    if (!selectedPromoteStudent) return;
+    if (saving || !selectedPromoteStudent) return;
     setSaving(true);
     setError("");
     setSuccess("");
@@ -208,7 +208,7 @@ export default function AdminRoles() {
 
   const executeDemote = async (e) => {
     e.preventDefault();
-    if (!selectedDemoteMentor) return;
+    if (saving || !selectedDemoteMentor) return;
     setSaving(true);
     setError("");
     setSuccess("");

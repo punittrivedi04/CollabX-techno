@@ -130,6 +130,7 @@ function AdminMentorDetailContent() {
 
   const handleDemote = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     try {

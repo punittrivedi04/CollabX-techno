@@ -234,6 +234,7 @@ export default function Tasks() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (saving) return;
 
     if (!form.title.trim() || !form.projectId) return;
 
@@ -290,7 +291,7 @@ export default function Tasks() {
 
       setTasks((current) =>
         current.map((task) =>
-          (task._id || task.id) === taskId ? response.data.task : task,
+          String(task._id || task.id) === String(taskId) ? response.data.task : task,
         ),
       );
       window.dispatchEvent(new CustomEvent("collabx_tasks_updated"));
@@ -307,7 +308,7 @@ export default function Tasks() {
     try {
       await api.delete(`/tasks/${taskId}`);
 
-      setTasks((current) => current.filter((task) => (task._id || task.id) !== taskId));
+      setTasks((current) => current.filter((task) => String(task._id || task.id) !== String(taskId)));
       window.dispatchEvent(new CustomEvent("collabx_tasks_updated"));
     } catch (err) {
       setError(getError(err));

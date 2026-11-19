@@ -284,7 +284,14 @@ export default function Projects() {
     }
 
     for (const task of tasks) {
-      const projectId = String(task.project?._id || task.project?.id || task.project || "");
+      const projectId = String(
+        task.project_id ||
+        task.projectId ||
+        task.project?._id ||
+        task.project?.id ||
+        task.project ||
+        ""
+      );
       if (!projectId || !result[projectId]) continue;
 
       result[projectId].total += 1;
@@ -425,6 +432,7 @@ export default function Projects() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (saving) return;
 
     const projectName = (form.name || "").trim();
     if (!projectName) return;
@@ -627,7 +635,17 @@ export default function Projects() {
       );
 
       setTasks((current) =>
-        current.filter((task) => (task.project?._id || task.project) !== id),
+        current.filter(
+          (task) =>
+            String(
+              task.project_id ||
+              task.projectId ||
+              task.project?._id ||
+              task.project?.id ||
+              task.project ||
+              ""
+            ) !== String(id),
+        ),
       );
       window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
     } catch (err) {

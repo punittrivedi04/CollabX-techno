@@ -12,6 +12,7 @@ export const SOCKET_BASE_URL = (
 
 const api = axios.create({
     baseURL: API_BASE_URL,
+    timeout: 30000,
     headers: {
         "Content-Type": "application/json",
     },
@@ -51,6 +52,10 @@ api.interceptors.response.use(
             ) {
                 window.location.replace("/login");
             }
+        }
+
+        if (!error.response && (error.code === "ECONNABORTED" || error.message === "Network Error")) {
+            error.message = "Unable to connect to CollabX servers. The server may be waking up from sleep; please try again in a moment.";
         }
 
         return Promise.reject(error);

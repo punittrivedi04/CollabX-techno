@@ -112,6 +112,7 @@ export default function MentorTasks() {
 
   const handleAssign = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     setSuccess("");

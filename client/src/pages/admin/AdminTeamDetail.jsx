@@ -102,6 +102,7 @@ export default function AdminTeamDetail() {
 
   const handleReassignMentor = async (e) => {
     e.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError("");
     setSuccess("");
