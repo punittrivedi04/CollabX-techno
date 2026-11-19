@@ -1,59 +1,58 @@
+import pool from "../config/db.js";
+import { isDirector } from "../middleware/directorGuard.js";
+import { parsePositiveInt } from "../utils/formatters.js";
+import { readCache, projectAccessCache, invalidateAllCaches } from "../utils/microCache.js";
 
-import mongoose from "mongoose";
-import Project from "../models/Project.js";
-import ChatMessage from "../models/ChatMessage.js";
+const MAX_MESSAGE_LEN = 2000;
 
-const validId = (id) =>
-    typeof id === "string" && /^[0-9a-fA-F]{24}$/.test(id);
-
-const getId = (value) =>
-    String(value?._id || value?.id || value || "");
-
-const hasAccess = (project, userId) => {
-    const currentUserId = String(userId);
-
-    const isOwner = getId(project.owner) === currentUserId;
-
-    const isMember = (project.members || []).some(
-        (member) => getId(member) === currentUserId
-    );
-
-    return isOwner || isMember;
+const normalizeChannel = (ch) => {
+    const s = String(ch || "").trim().toLowerCase();
+    return s === "unofficial" ? "unofficial" : "official";
 };
 
-const getProjectRecipients = (project) => {
-    const recipientIds = new Set([
-        getId(project.owner),
-        ...(project.members || []).map(getId),
-    ]);
-
-    return [...recipientIds]
-        .filter(Boolean)
-        .map((id) => `user:${id}`);
-};
-
-const emitToProject = (req, project, event, data) => {
-    const io = req.app.get("io");
-
-    if (io) {
-        io.to(getProjectRecipients(project)).emit(event, data);
-    }
-};
-
-// GET CHAT HISTORY
-export const getChatMessages = async (req, res) => {
+// 1. GET CHAT MESSAGES
+export const getChatMessages = async (req, res, next) => {
     try {
-        const { projectId } = req.params;
-        const userId = req.user.id;
-
-        if (!validId(projectId)) {
-            return res.status(400).json({
+        if (isDirector(req.user)) {
+            return res.status(403).json({
                 success: false,
-                message: "Invalid project ID",
+                message: "Director account does not have access to project chat channels",
             });
         }
 
-        const project = await Project.findById(projectId);
+        const projectId = parsePositiveInt(req.params.projectId);
+        const channel = normalizeChannel(req.query.channel || req.body?.channel);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isMentorRole = role === "mentor" || role === "faculty";
+
+        if (!projectId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID is required",
+            });
+        }
+
+        // Strict access check for unofficial channel:
+        // Mentors, Admins, and Directors CANNOT access unofficial channel
+        if (channel === "unofficial") {
+            if (isAdmin || isMentorRole || isDirector(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Unofficial chat is strictly private to student team members",
+                });
+            }
+        }
+
+        // Check project access (cached via bounded 3s micro cache, auto-invalidated on writes)
+        const project = await projectAccessCache.getOrSet(`proj:${projectId}`, async () => {
+            const projRes = await pool.query(
+                "SELECT id, owner_id, mentor_id FROM projects WHERE id = $1",
+                [projectId]
+            );
+            return projRes.rows[0] || null;
+        });
 
         if (!project) {
             return res.status(404).json({
@@ -62,331 +61,400 @@ export const getChatMessages = async (req, res) => {
             });
         }
 
-        if (!hasAccess(project, userId)) {
-            return res.status(403).json({
-                success: false,
-                message: "You do not have access to this project chat",
+        const isOwner = Number(project.owner_id) === Number(userId);
+        const isAssignedMentor = Number(project.mentor_id) === Number(userId);
+
+        const checkIsMember = () =>
+            projectAccessCache.getOrSet(`pm:${projectId}:${userId}`, async () => {
+                const memberCheck = await pool.query(
+                    "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                    [projectId, userId]
+                );
+                return memberCheck.rows.length > 0;
             });
+
+        if (channel === "unofficial") {
+            if (!isOwner && !(await checkIsMember())) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You do not have access to this project chat",
+                });
+            }
+        } else {
+            if (!isAdmin && !isOwner && !isAssignedMentor && !(await checkIsMember())) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You do not have access to this project chat",
+                });
+            }
         }
 
-        const messages = await ChatMessage.find({
-            project: projectId,
-            hiddenFor: { $ne: userId },
-        })
-            .populate("sender", "name email")
-            .sort({ createdAt: -1 })
-            .limit(100)
-            .lean();
+        const chatCacheKey = `chat:u:${userId}:r:${role}:p:${projectId}:c:${channel}`;
+        const formatted = await readCache.getOrSet(chatCacheKey, async () => {
+            const { rows: messages } = await pool.query(`
+                SELECT m.id, m.project_id, m.sender_id, m.channel, m.content, m.created_at,
+                       u.name as sender_name, u.email as sender_email, u.role as sender_role
+                FROM messages m
+                JOIN users u ON m.sender_id = u.id
+                WHERE m.project_id = $1 AND (m.channel = $2 OR (m.channel IS NULL AND $2 = 'official'))
+                ORDER BY m.created_at ASC
+                LIMIT 200;
+            `, [projectId, channel]);
 
-        messages.reverse();
+            return messages.map((m) => ({
+                id: m.id,
+                _id: m.id,
+                project: m.project_id,
+                projectId: m.project_id,
+                channel: m.channel || "official",
+                sender: {
+                    id: m.sender_id,
+                    _id: m.sender_id,
+                    name: m.sender_name,
+                    email: m.sender_email,
+                    role: m.sender_role,
+                },
+                content: m.content,
+                message: m.content,
+                createdAt: m.created_at,
+            }));
+        });
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            count: messages.length,
-            messages,
+            channel,
+            count: formatted.length,
+            messages: formatted,
+            data: formatted,
         });
     } catch (error) {
-        console.error("getChatMessages:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to load chat messages",
-        });
+        next(error);
     }
 };
 
-// SEND CHAT MESSAGE
-export const sendChatMessage = async (req, res) => {
+// 2. SEND CHAT MESSAGE
+export const sendChatMessage = async (req, res, next) => {
     try {
-        const { projectId } = req.params;
+        if (isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director account does not have access to project chat channels",
+            });
+        }
+
+        const projectId = parsePositiveInt(req.params.projectId);
+        const channel = normalizeChannel(req.body?.channel || req.query?.channel);
         const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isMentorRole = role === "mentor" || role === "faculty";
+        const { content, message } = req.body || {};
+        const rawText = typeof content === "string" ? content : typeof message === "string" ? message : "";
+        const textContent = rawText.trim();
 
-        const content =
-            typeof req.body?.content === "string"
-                ? req.body.content.trim()
-                : "";
-
-        if (!validId(projectId)) {
+        if (!projectId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid project ID",
+                message: "Valid project ID is required",
             });
         }
 
-        if (!content) {
+        if (!textContent) {
             return res.status(400).json({
                 success: false,
-                message: "Message cannot be empty",
+                message: "Message content cannot be empty",
             });
         }
 
-        if (content.length > 2000) {
+        if (textContent.length > MAX_MESSAGE_LEN) {
             return res.status(400).json({
                 success: false,
-                message: "Message cannot exceed 2000 characters",
+                message: `Message cannot exceed ${MAX_MESSAGE_LEN} characters`,
             });
         }
 
-        const project = await Project.findById(projectId);
+        // Strict role check for unofficial channel
+        if (channel === "unofficial") {
+            if (isAdmin || isMentorRole || isDirector(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Unofficial chat is strictly private to student team members",
+                });
+            }
+        }
 
-        if (!project) {
+        // Check project access
+        const projRes = await pool.query(
+            "SELECT id, owner_id, mentor_id FROM projects WHERE id = $1",
+            [projectId]
+        );
+
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (!hasAccess(project, userId)) {
-            return res.status(403).json({
-                success: false,
-                message: "You do not have permission to send messages",
-            });
+        const project = projRes.rows[0];
+        const isOwner = Number(project.owner_id) === Number(userId);
+        const isAssignedMentor = Number(project.mentor_id) === Number(userId);
+
+        if (channel === "unofficial") {
+            if (!isOwner) {
+                const memberCheck = await pool.query(
+                    "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                    [projectId, userId]
+                );
+                if (memberCheck.rows.length === 0) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You do not have access to send messages in this project",
+                    });
+                }
+            }
+        } else {
+            if (!isAdmin && !isOwner && !isAssignedMentor) {
+                const memberCheck = await pool.query(
+                    "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                    [projectId, userId]
+                );
+                if (memberCheck.rows.length === 0) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You do not have access to send messages in this project",
+                    });
+                }
+            }
         }
 
-        const message = await ChatMessage.create({
-            project: project._id,
-            sender: userId,
-            content,
-        });
+        const insertRes = await pool.query(`
+            INSERT INTO messages (project_id, sender_id, channel, content, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            RETURNING id, project_id, sender_id, channel, content, created_at;
+        `, [projectId, userId, channel, textContent]);
 
-        const populatedMessage = await ChatMessage.findById(message._id)
-            .populate("sender", "name email")
-            .lean();
+        const inserted = insertRes.rows[0];
+        invalidateAllCaches();
 
-        emitToProject(req, project, "chat:message:new", populatedMessage);
+        const formatted = {
+            id: inserted.id,
+            _id: inserted.id,
+            project: inserted.project_id,
+            projectId: inserted.project_id,
+            channel: inserted.channel,
+            sender: {
+                id: req.user.id,
+                _id: req.user.id,
+                name: req.user.name,
+                email: req.user.email,
+                role: req.user.role,
+            },
+            content: inserted.content,
+            message: inserted.content,
+            createdAt: inserted.created_at,
+        };
+
+        // Broadcast strictly to project_${projectId}_${channel}
+        const io = req.app.get("io");
+        if (io) {
+            const roomName = `project_${projectId}_${channel}`;
+            io.to(roomName).emit("chat:message:new", formatted);
+            io.to(roomName).emit("chat_message_received", {
+                message: formatted,
+            });
+        }
 
         return res.status(201).json({
             success: true,
-            message: "Message sent successfully",
-            data: populatedMessage,
+            message: "Message sent",
+            data: formatted,
+            messageData: formatted,
         });
     } catch (error) {
-        console.error("sendChatMessage:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to send message",
-        });
+        next(error);
     }
 };
 
-// EDIT OWN MESSAGE
-export const editChatMessage = async (req, res) => {
+// 3. EDIT CHAT MESSAGE (Strict Sender Ownership)
+export const editChatMessage = async (req, res, next) => {
     try {
-        const { projectId, messageId } = req.params;
-        const userId = req.user.id;
-
-        const content =
-            typeof req.body?.content === "string"
-                ? req.body.content.trim()
-                : "";
-
-        if (!validId(projectId) || !validId(messageId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid project or message ID",
-            });
-        }
-
-        if (!content) {
-            return res.status(400).json({
-                success: false,
-                message: "Message cannot be empty",
-            });
-        }
-
-        if (content.length > 2000) {
-            return res.status(400).json({
-                success: false,
-                message: "Message cannot exceed 2000 characters",
-            });
-        }
-
-        const project = await Project.findById(projectId);
-
-        if (!project) {
-            return res.status(404).json({
-                success: false,
-                message: "Project not found",
-            });
-        }
-
-        if (!hasAccess(project, userId)) {
+        if (isDirector(req.user)) {
             return res.status(403).json({
                 success: false,
-                message: "You do not have access to this project chat",
+                message: "Director account does not have access to project chat channels",
             });
         }
 
-        const message = await ChatMessage.findOne({
-            _id: messageId,
-            project: projectId,
-        });
+        const projectId = parsePositiveInt(req.params.projectId);
+        const messageId = parsePositiveInt(req.params.messageId || req.params.id);
+        const userId = req.user.id;
+        const { content, message } = req.body || {};
+        const rawText = typeof content === "string" ? content : typeof message === "string" ? message : "";
+        const textContent = rawText.trim();
 
-        if (!message) {
+        if (!projectId || !messageId || !textContent) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID, message ID, and content are required",
+            });
+        }
+
+        if (textContent.length > MAX_MESSAGE_LEN) {
+            return res.status(400).json({
+                success: false,
+                message: `Message cannot exceed ${MAX_MESSAGE_LEN} characters`,
+            });
+        }
+
+        const { rows } = await pool.query(
+            "SELECT id, project_id, channel, sender_id FROM messages WHERE id = $1 AND project_id = $2",
+            [messageId, projectId]
+        );
+        if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Message not found",
             });
         }
 
-        if (getId(message.sender) !== String(userId)) {
+        const existingMsg = rows[0];
+
+        // Strict Sender Ownership Check: ONLY the original author can edit
+        if (String(existingMsg.sender_id) !== String(userId)) {
             return res.status(403).json({
                 success: false,
                 message: "You can only edit your own messages",
             });
         }
 
-        if (message.isDeleted) {
-            return res.status(400).json({
-                success: false,
-                message: "Deleted messages cannot be edited",
-            });
+        const updateRes = await pool.query(`
+            UPDATE messages
+            SET content = $1
+            WHERE id = $2 AND sender_id = $3
+            RETURNING *;
+        `, [textContent, messageId, Number(userId)]);
+
+        const updated = updateRes.rows[0];
+        invalidateAllCaches();
+
+        const senderRes = await pool.query(
+            "SELECT id, name, email, role FROM users WHERE id = $1",
+            [updated.sender_id]
+        );
+        const sender = senderRes.rows[0] || req.user;
+
+        const formatted = {
+            id: updated.id,
+            _id: updated.id,
+            project: updated.project_id,
+            projectId: updated.project_id,
+            channel: updated.channel || "official",
+            sender: {
+                id: sender.id,
+                _id: sender.id,
+                name: sender.name,
+                email: sender.email,
+                role: sender.role,
+            },
+            content: updated.content,
+            message: updated.content,
+            createdAt: updated.created_at,
+        };
+
+        const io = req.app.get("io");
+        if (io) {
+            const roomName = `project_${updated.project_id}_${updated.channel || "official"}`;
+            io.to(roomName).emit("chat:message:updated", formatted);
         }
 
-        message.content = content;
-        message.editedAt = new Date();
-
-        await message.save();
-
-        const updatedMessage = await ChatMessage.findById(message._id)
-            .populate("sender", "name email")
-            .lean();
-
-        emitToProject(
-            req,
-            project,
-            "chat:message:updated",
-            updatedMessage
-        );
-
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Message updated successfully",
-            data: updatedMessage,
+            message: "Message updated",
+            data: formatted,
         });
     } catch (error) {
-        console.error("editChatMessage:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to edit message",
-        });
+        next(error);
     }
 };
 
-// DELETE MESSAGE
-// mode=everyone -> soft-delete for all project members
-// mode=me       -> hide only for the current user
-export const deleteChatMessage = async (req, res) => {
+// 4. DELETE CHAT MESSAGE ("Delete for Everyone" - Strict Sender Ownership)
+export const deleteChatMessage = async (req, res, next) => {
     try {
-        const { projectId, messageId } = req.params;
-        const userId = req.user.id;
-        const mode = req.query.mode;
-
-        if (!validId(projectId) || !validId(messageId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid project or message ID",
-            });
-        }
-
-        if (!["me", "everyone"].includes(mode)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid delete mode",
-            });
-        }
-
-        const project = await Project.findById(projectId);
-
-        if (!project) {
-            return res.status(404).json({
-                success: false,
-                message: "Project not found",
-            });
-        }
-
-        if (!hasAccess(project, userId)) {
+        if (isDirector(req.user)) {
             return res.status(403).json({
                 success: false,
-                message: "You do not have access to this project chat",
+                message: "Director account does not have access to project chat channels",
             });
         }
 
-        const message = await ChatMessage.findOne({
-            _id: messageId,
-            project: projectId,
-        });
+        const projectId = parsePositiveInt(req.params.projectId);
+        const messageId = parsePositiveInt(req.params.messageId || req.params.id);
+        const userId = req.user.id;
 
-        if (!message) {
+        if (!projectId || !messageId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID and message ID are required",
+            });
+        }
+
+        const { rows } = await pool.query(
+            "SELECT id, project_id, channel, sender_id FROM messages WHERE id = $1 AND project_id = $2",
+            [messageId, projectId]
+        );
+
+        if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Message not found",
             });
         }
 
-        if (mode === "everyone") {
-            // Only the original sender can delete for everyone
-            if (getId(message.sender) !== String(userId)) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You can only delete your own message for everyone",
-                });
-            }
+        const existingMsg = rows[0];
 
-            if (!message.isDeleted) {
-                message.content = "This message was deleted";
-                message.isDeleted = true;
-                message.deletedAt = new Date();
-
-                await message.save();
-            }
-
-            const deletedMessage = await ChatMessage.findById(message._id)
-                .populate("sender", "name email")
-                .lean();
-
-            emitToProject(
-                req,
-                project,
-                "chat:message:deleted",
-                deletedMessage
-            );
-
-            return res.json({
-                success: true,
-                message: "Message deleted for everyone",
-                data: deletedMessage,
+        // Strict Sender Ownership Check: ONLY the original sender can delete (no admin/mentor/owner bypass)
+        if (String(existingMsg.sender_id) !== String(userId)) {
+            return res.status(403).json({
+                success: false,
+                message: "You can only delete your own messages",
             });
         }
 
-        // Hide only for the current user
-        await ChatMessage.updateOne(
-            { _id: messageId, project: projectId },
-            { $addToSet: { hiddenFor: new mongoose.Types.ObjectId(userId) } }
+        await pool.query(
+            "DELETE FROM messages WHERE id = $1 AND sender_id = $2",
+            [messageId, Number(userId)]
         );
+        invalidateAllCaches();
 
+        const channel = existingMsg.channel || "official";
         const io = req.app.get("io");
-
         if (io) {
-            io.to(`user:${userId}`).emit("chat:message:hidden", {
-                project: projectId,
+            const roomName = `project_${existingMsg.project_id}_${channel}`;
+            const payload = {
                 messageId,
-            });
+                id: messageId,
+                _id: messageId,
+                project: existingMsg.project_id,
+                projectId: existingMsg.project_id,
+                channel,
+            };
+            io.to(roomName).emit("chat:message:deleted", payload);
+            io.to(roomName).emit("message_deleted", payload);
         }
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Message deleted for you",
-            data: { messageId },
+            message: "Message deleted successfully",
+            data: {
+                id: messageId,
+                _id: messageId,
+                messageId,
+                projectId: existingMsg.project_id,
+                channel,
+            },
         });
     } catch (error) {
-        console.error("deleteChatMessage:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to delete message",
-        });
+        next(error);
     }
 };

@@ -2,24 +2,61 @@ import mongoose from "mongoose";
 
 const projectSchema = new mongoose.Schema(
     {
+        title: {
+            type: String,
+            trim: true,
+            maxlength: 300,
+        },
+
         name: {
             type: String,
-            required: true,
             trim: true,
-            maxlength: 100,
+            maxlength: 300,
+        },
+
+        projectTitle: {
+            type: String,
+            trim: true,
+            maxlength: 500,
+            default: "",
         },
 
         description: {
             type: String,
             trim: true,
-            maxlength: 1000,
+            maxlength: 3000,
+            default: "",
+        },
+
+        githubUrl: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+
+        demoUrl: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+
+        pptUrl: {
+            type: String,
+            trim: true,
             default: "",
         },
 
         status: {
             type: String,
             enum: ["Planning", "In Progress", "Completed", "On Hold"],
-            default: "Planning",
+            default: "In Progress",
+        },
+
+        progress: {
+            type: Number,
+            min: 0,
+            max: 100,
+            default: 0,
         },
 
         priority: {
@@ -41,6 +78,13 @@ const projectSchema = new mongoose.Schema(
             },
         ],
 
+        teamMembers: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "User",
+            },
+        ],
+
         deadline: {
             type: Date,
             default: null,
@@ -50,6 +94,14 @@ const projectSchema = new mongoose.Schema(
         timestamps: true,
     }
 );
+
+projectSchema.pre("validate", function (next) {
+    if (this.title && !this.name) this.name = this.title;
+    if (this.name && !this.title) this.title = this.name;
+    if (this.teamMembers?.length && !this.members?.length) this.members = this.teamMembers;
+    if (this.members?.length && !this.teamMembers?.length) this.teamMembers = this.members;
+    next();
+});
 
 // Projects owned by a user, newest first
 projectSchema.index({ owner: 1, createdAt: -1 });

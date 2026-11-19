@@ -28,3 +28,8 @@ server/check-login.js
 server/reset-and-test.js
 server/reset-password.js
 server/controllers/Notification.js
+
+# Database dumps (keep canonical schema.sql only)
+*.sql
+!schema.sql
+!server/schema.sql

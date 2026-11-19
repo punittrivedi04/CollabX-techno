@@ -83,16 +83,56 @@ export function AuthProvider({ children }) {
     return response.data;
   };
 
-  // Register
-  const register = async (name, email, password) => {
-    const response = await api.post("/auth/register", {
-      name,
+  // Register (step 1: sends OTP to email)
+  const register = async (name, email, password, roll_no) => {
+    const payload =
+      typeof name === "object" && name !== null
+        ? name
+        : { name, email, password, roll_no };
+    const response = await api.post("/auth/register", payload);
+    return response.data;
+  };
+
+  // Verify OTP (step 2 for signup: activates user and returns session)
+  const verifyOtp = async (email, otp, otpToken) => {
+    const response = await api.post("/auth/verify-otp", {
       email,
-      password,
+      otp,
+      otpToken,
     });
 
-    saveSession(response.data);
+    if (response.data?.token && response.data?.user) {
+      saveSession(response.data);
+    }
 
+    return response.data;
+  };
+
+  // Resend OTP
+  const resendOtp = async (email, purpose = "signup") => {
+    const response = await api.post("/auth/resend-otp", {
+      email,
+      purpose,
+    });
+    return response.data;
+  };
+
+  // Forgot password (sends reset OTP)
+  const forgotPassword = async (email) => {
+    const response = await api.post("/auth/forgot-password", {
+      email,
+    });
+    return response.data;
+  };
+
+  // Reset password (verifies OTP and sets new password)
+  const resetPassword = async (email, otp, otpToken, newPassword) => {
+    const response = await api.post("/auth/reset-password", {
+      email,
+      otp,
+      otpToken,
+      newPassword,
+    });
     return response.data;
   };
 
@@ -106,6 +146,15 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  // Update logged-in user state and cache
+  const updateUser = (updatedUser) => {
+    setUser((prev) => {
+      const merged = { ...prev, ...updatedUser };
+      localStorage.setItem("collabx_user", JSON.stringify(merged));
+      return merged;
+    });
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -113,7 +162,13 @@ export function AuthProvider({ children }) {
         loading,
         login,
         register,
+        verifyOtp,
+        resendOtp,
+        forgotPassword,
+        resetPassword,
+        saveSession,
         logout,
+        updateUser,
         isAuthenticated: Boolean(user),
       }}
     >

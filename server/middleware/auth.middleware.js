@@ -1,7 +1,39 @@
-
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
-import User from "../models/User.js";
+import pool from "../config/db.js";
+import { safeUser, parsePositiveInt } from "../utils/formatters.js";
+import { userAuthCache, isTokenRevoked } from "../utils/microCache.js";
+
+export const getEffectiveRole = (user) => {
+    if (!user) return "";
+    const normalized = String(user.role || "student").toLowerCase().trim();
+    if (normalized === "director") return "director";
+    if (normalized === "coordinator") return "admin";
+    if (normalized === "faculty") return "mentor";
+    return normalized;
+};
+
+export const authorize = (...allowedRoles) => {
+    const normalizedAllowed = allowedRoles.map((r) => String(r || "").toLowerCase().trim());
+
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required. Please login.",
+            });
+        }
+
+        const effectiveRole = getEffectiveRole(req.user);
+        if (!normalizedAllowed.includes(effectiveRole)) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied. You do not have permission to access this portal.",
+            });
+        }
+
+        return next();
+    };
+};
 
 const protect = async (req, res, next) => {
     try {
@@ -24,31 +56,41 @@ const protect = async (req, res, next) => {
         }
 
         const secret = process.env.JWT_SECRET;
-
         if (!secret) {
-            return next(new Error("JWT_SECRET is missing"));
+            return next(new Error("JWT_SECRET is missing in environment variables"));
         }
 
-        // Verify only the expected signing algorithm
-        const decoded = jwt.verify(token, secret, {
-            algorithms: ["HS256"],
-        });
+        const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
 
-        // Validate decoded user ID
-        if (
-            !decoded ||
-            typeof decoded.id !== "string" ||
-            !/^[a-fA-F0-9]{24}$/.test(decoded.id) ||
-            !mongoose.Types.ObjectId.isValid(decoded.id)
-        ) {
+        if (!decoded || decoded.type === "refresh" || !decoded.id) {
             return res.status(401).json({
                 success: false,
                 message: "Invalid authentication token.",
             });
         }
 
-        // Fetch authenticated user without password
-        const user = await User.findById(decoded.id).select("-password");
+        const userId = parsePositiveInt(decoded.id);
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid authentication token.",
+            });
+        }
+
+        if (isTokenRevoked(userId, decoded)) {
+            return res.status(401).json({
+                success: false,
+                message: "Session has been invalidated. Please login again.",
+            });
+        }
+
+        const user = await userAuthCache.getOrSet(`auth:${userId}`, async () => {
+            const { rows } = await pool.query(
+                "SELECT id, name, email, roll_no, role, phone, mentor_id, role_classified, is_verified, is_active, created_at FROM users WHERE id = $1",
+                [userId]
+            );
+            return rows[0] || null;
+        });
 
         if (!user) {
             return res.status(401).json({
@@ -57,10 +99,20 @@ const protect = async (req, res, next) => {
             });
         }
 
-        req.user = user;
+        if (user.is_active === false) {
+            return res.status(403).json({
+                success: false,
+                message: "User account has been deactivated.",
+            });
+        }
+
+        req.user = {
+            id: user.id,
+            _id: user.id,
+            ...safeUser(user),
+        };
 
         return next();
-
     } catch (error) {
         if (
             error.name === "TokenExpiredError" ||
@@ -76,7 +128,6 @@ const protect = async (req, res, next) => {
             });
         }
 
-        // Database and unexpected server errors
         return next(error);
     }
 };

@@ -1,10 +1,17 @@
 
 import axios from "axios";
 
+// Centralized Source of Truth for CollabX API & Socket.IO URLs
+export const API_BASE_URL = (
+    import.meta.env.VITE_API_URL || "http://localhost:5000/api"
+).trim().replace(/\/+$/, "");
+
+export const SOCKET_BASE_URL = (
+    import.meta.env.VITE_SOCKET_URL || API_BASE_URL.replace(/\/api\/?$/, "")
+).trim().replace(/\/+$/, "");
+
 const api = axios.create({
-    baseURL:
-        import.meta.env.VITE_API_URL ||
-        "http://localhost:5000/api",
+    baseURL: API_BASE_URL,
     headers: {
         "Content-Type": "application/json",
     },
@@ -32,9 +39,7 @@ api.interceptors.response.use(
         const status = error.response?.status;
         const requestUrl = error.config?.url || "";
 
-        const isAuthRequest =
-            requestUrl.includes("/auth/login") ||
-            requestUrl.includes("/auth/register");
+        const isAuthRequest = requestUrl.includes("/auth/");
 
         if (status === 401 && !isAuthRequest) {
             localStorage.removeItem("collabx_token");

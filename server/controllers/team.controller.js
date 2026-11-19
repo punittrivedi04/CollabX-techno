@@ -1,815 +1,1024 @@
-
-import Project from "../models/Project.js";
-import User from "../models/User.js";
-import Invitation from "../models/Invitation.js";
-import Notification from "../models/Notification.js";
+import pool from "../config/db.js";
+import { parsePositiveInt, pickAllowedFields } from "../utils/formatters.js";
+import { isDirector } from "../middleware/directorGuard.js";
+import { invalidateAllCaches } from "../utils/microCache.js";
 import logActivity from "../utils/activityLogger.js";
 
-const validId = (id) =>
-    typeof id === "string" && /^[0-9a-fA-F]{24}$/.test(id);
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ALLOWED_MEMBER_ROLES = new Set(["member"]);
+const MENTOR_ROLES = new Set(["mentor", "faculty"]);
 
-const getId = (value) =>
-    String(value?._id || value?.id || value || "");
-
-const isOwner = (project, userId) =>
-    getId(project.owner) === String(userId);
-
-const isMember = (project, userId) =>
-    project.members.some(
-        (member) => getId(member) === String(userId)
-    );
-
-const hasAccess = (project, userId) =>
-    isOwner(project, userId) || isMember(project, userId);
-
-const invitationUrl = (id) => {
-    const base = (process.env.CLIENT_URL || "http://localhost:5173")
-        .replace(/\/$/, "");
-
-    return `${base}/notifications?invitation=${id}`;
+const evictUserFromProjectRooms = (req, projectId, targetUserId) => {
+    const io = req.app.get("io");
+    if (!io || !projectId || !targetUserId) return;
+    io.in(`user:${targetUserId}`).socketsLeave([
+        `project_${projectId}_official`,
+        `project_${projectId}_unofficial`,
+    ]);
 };
 
-// ==========================================
-// REAL-TIME NOTIFICATION HELPER
-// ==========================================
-
-const emitNotification = async (req, notificationId, recipientId) => {
+// 1. GET PROJECT TEAM
+export const getProjectTeam = async (req, res, next) => {
     try {
-        const io = req.app.get("io");
+        const projectId = parsePositiveInt(req.params.projectId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator" || isDirector(req.user);
 
-        if (!io) {
-            console.error("Socket.IO instance not found");
-            return false;
-        }
-
-        const recipient = getId(recipientId);
-
-        if (!recipient) {
-            console.error("Invalid notification recipient:", recipientId);
-            return false;
-        }
-
-        const notification = await Notification.findById(notificationId)
-            .populate("sender", "name email")
-            .populate("project", "name")
-            .populate("invitation", "status");
-
-        if (!notification) {
-            console.error("Notification not found:", notificationId);
-            return false;
-        }
-
-        const room = `user:${recipient}`;
-
-        io.to(room).emit("notification:new", notification);
-
-        console.log("Notification emitted to:", room);
-
-        return true;
-    } catch (error) {
-        console.error("Socket notification error:", error);
-        return false;
-    }
-};
-
-// ==========================================
-// GET PROJECT TEAM
-// ==========================================
-
-export const getProjectTeam = async (req, res) => {
-    try {
-        const { projectId } = req.params;
-
-        if (!validId(projectId)) {
+        if (!projectId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid project ID",
+                message: "Valid project ID is required",
             });
         }
 
-        const project = await Project.findById(projectId)
-            .populate("owner", "name email")
-            .populate("members", "name email");
+        const projRes = await pool.query(`
+            SELECT p.*, u.name as owner_name, u.email as owner_email, u.roll_no as owner_roll_no,
+                   m.name as mentor_name, m.email as mentor_email
+            FROM projects p
+            LEFT JOIN users u ON p.owner_id = u.id
+            LEFT JOIN users m ON p.mentor_id = m.id
+            WHERE p.id = $1;
+        `, [projectId]);
 
-        if (!project) {
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (!hasAccess(project, req.user.id)) {
+        const project = projRes.rows[0];
+
+        // Check project access
+        const memberCheck = await pool.query(
+            "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+            [projectId, userId]
+        );
+        const isMember = memberCheck.rows.length > 0;
+        const isOwner = Number(project.owner_id) === Number(userId);
+        const isMentor = Number(project.mentor_id) === Number(userId);
+
+        if (!isAdmin && !isOwner && !isMember && !isMentor) {
             return res.status(403).json({
                 success: false,
-                message: "You do not have access to this project",
+                message: "You do not have access to view this project team",
             });
         }
 
-        const owner = getId(project.owner) === String(req.user.id);
+        const membersRes = await pool.query(`
+            SELECT pm.role, u.id, u.name, u.email, u.roll_no, u.created_at
+            FROM project_members pm
+            JOIN users u ON pm.user_id = u.id
+            WHERE pm.project_id = $1;
+        `, [projectId]);
 
-        const pending = owner
-            ? await Invitation.find({
-                project: projectId,
-                status: "Pending",
-            })
-                .populate("recipient", "name email")
-                .sort({ createdAt: -1 })
-            : [];
+        const rawMembers = membersRes.rows.map((m) => ({
+            id: m.id,
+            _id: m.id,
+            name: m.name,
+            email: m.email,
+            role: m.role || "member",
+            roll_no: m.roll_no || "",
+            createdAt: m.created_at,
+        }));
 
-        return res.json({
-            success: true,
-            team: {
-                owner: project.owner,
-                members: project.members,
-                totalMembers: project.members.length + 1,
+        // Zero duplicate owner entries in members
+        const cleanMembers = rawMembers.filter((m) => String(m.id) !== String(project.owner_id));
+
+        const ownerObj = project.owner_id ? {
+            id: project.owner_id,
+            _id: project.owner_id,
+            name: project.owner_name || "Lead",
+            email: project.owner_email || "",
+            roll_no: project.owner_roll_no || "",
+            role: "lead",
+        } : null;
+
+        const totalTeamSize = cleanMembers.length + (ownerObj ? 1 : 0);
+
+        const invitesRes = await pool.query(`
+            SELECT i.*, u.name as sender_name, u.email as sender_email,
+                   r.name as recipient_name, r.email as recipient_user_email, r.roll_no as recipient_roll_no
+            FROM invitations i
+            LEFT JOIN users u ON i.sender_id = u.id
+            LEFT JOIN users r ON i.recipient_id = r.id
+            WHERE i.project_id = $1 AND i.status = 'Pending'
+            ORDER BY i.created_at DESC;
+        `, [projectId]);
+
+        const formattedInvites = invitesRes.rows.map((i) => ({
+            id: i.id,
+            _id: i.id,
+            recipientEmail: i.recipient_email,
+            recipient: {
+                id: i.recipient_id || null,
+                _id: i.recipient_id || null,
+                name: i.recipient_name || i.recipient_email,
+                email: i.recipient_user_email || i.recipient_email,
+                roll_no: i.recipient_roll_no || "",
             },
-            pendingInvitations: pending.map((item) => ({
-                ...item.toObject(),
-                invitationUrl: invitationUrl(item._id),
-            })),
+            role: i.role || "member",
+            status: i.status,
+            sender: {
+                id: i.sender_id,
+                _id: i.sender_id,
+                name: i.sender_name,
+                email: i.sender_email,
+            },
+            createdAt: i.created_at,
+        }));
+
+        const mentorObj = project.mentor_id
+            ? {
+                  id: project.mentor_id,
+                  _id: project.mentor_id,
+                  name: project.mentor_name || "Mentor",
+                  email: project.mentor_email || "",
+              }
+            : null;
+
+        const teamData = {
+            project: {
+                id: project.id,
+                _id: project.id,
+                name: project.title,
+                title: project.title,
+                status: project.status,
+                description: project.description || "",
+                mentorReview: project.mentor_review || null,
+                reviewedAt: project.reviewed_at || null,
+                pptUrl: project.ppt_url || "",
+                demoUrl: project.demo_url || "",
+                githubUrl: project.github_url || "",
+            },
+            owner: ownerObj,
+            mentor: mentorObj,
+            members: cleanMembers,
+            teamMembers: cleanMembers,
+            totalMembers: totalTeamSize,
+            memberCount: totalTeamSize,
+            mentorReview: project.mentor_review || null,
+            reviewedAt: project.reviewed_at || null,
+        };
+
+        return res.status(200).json({
+            success: true,
+            team: teamData,
+            ...teamData,
+            pendingInvitations: formattedInvites,
+            invitations: formattedInvites,
         });
     } catch (error) {
-        console.error("getProjectTeam:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to load team",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// SEND INVITATION
-// ==========================================
-
-export const sendInvitation = async (req, res) => {
-    let invitation;
-
+// 2. SEND INVITATION (Supports both Student Team Member & Faculty Mentor Invitations)
+export const sendInvitation = async (req, res, next) => {
     try {
-        const { projectId } = req.params;
-        const email = req.body.email?.trim().toLowerCase();
+        const projectId = parsePositiveInt(req.params.projectId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+        const {
+            email,
+            role: requestedInviteRole,
+            mentorId,
+            mentor_id,
+        } = pickAllowedFields(req.body, ["email", "role", "mentorId", "mentor_id"]);
 
-        if (!validId(projectId)) {
+        const inviteType =
+            String(requestedInviteRole || "").trim().toLowerCase() === "mentor" ||
+            mentorId !== undefined ||
+            mentor_id !== undefined
+                ? "mentor"
+                : "member";
+
+        if (!projectId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid project ID",
+                message: "Valid project ID is required",
             });
         }
 
-        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            return res.status(400).json({
-                success: false,
-                message: "Enter a valid email",
-            });
-        }
-
-        const project = await Project.findById(projectId);
-
-        if (!project) {
+        const projRes = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (!isOwner(project, req.user.id)) {
+        const project = projRes.rows[0];
+        if (role === "mentor" || role === "faculty" || (!isAdmin && Number(project.owner_id) !== Number(userId))) {
             return res.status(403).json({
                 success: false,
-                message: "Only the owner can invite members",
+                message: "Forbidden. Only the current Team Leader or an Administrator can add or invite squad members.",
             });
         }
 
-        const recipient = await User.findOne({ email });
+        // Branch A: Student-driven Mentor Invitation (mentor must accept before assignment)
+        if (inviteType === "mentor") {
+            let mentorRow = null;
+            const parsedMentorId = parsePositiveInt(mentorId ?? mentor_id);
+            if (parsedMentorId) {
+                const mRes = await pool.query(
+                    "SELECT id, name, email, role, is_active FROM users WHERE id = $1",
+                    [parsedMentorId]
+                );
+                mentorRow = mRes.rows[0] || null;
+            } else if (typeof email === "string" && email.trim()) {
+                const cleanEmail = email.trim().toLowerCase();
+                if (cleanEmail.length > 254 || !EMAIL_PATTERN.test(cleanEmail)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Please provide a valid mentor email address",
+                    });
+                }
+                const mRes = await pool.query(
+                    "SELECT id, name, email, role, is_active FROM users WHERE LOWER(email) = LOWER($1)",
+                    [cleanEmail]
+                );
+                mentorRow = mRes.rows[0] || null;
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please select a mentor or provide a mentor email",
+                });
+            }
 
-        if (!recipient) {
-            return res.status(404).json({
-                success: false,
-                message: "No registered CollabX user found with this email",
+            if (
+                !mentorRow ||
+                !mentorRow.is_active ||
+                !MENTOR_ROLES.has(String(mentorRow.role || "").toLowerCase()) ||
+                isDirector(mentorRow)
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Selected user must be an active registered Faculty Mentor",
+                });
+            }
+
+            if (Number(project.mentor_id) === Number(mentorRow.id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `${mentorRow.name} is already the assigned mentor for this project`,
+                });
+            }
+
+            const pendingMentorCheck = await pool.query(
+                `SELECT id FROM invitations
+                 WHERE project_id = $1 AND recipient_id = $2 AND role = 'mentor' AND status = 'Pending'`,
+                [projectId, mentorRow.id]
+            );
+            if (pendingMentorCheck.rows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `A mentor invitation is already pending for ${mentorRow.name}`,
+                });
+            }
+
+            const insertRes = await pool.query(
+                `INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, created_at)
+                 VALUES ($1, $2, $3, $4, 'mentor', 'Pending', NOW())
+                 RETURNING *;`,
+                [projectId, mentorRow.email.toLowerCase(), mentorRow.id, userId]
+            );
+
+            const notifRes = await pool.query(
+                `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                 VALUES ($1, 'Mentor Invitation', $2, 'mentor_invitation', FALSE, NOW())
+                 RETURNING id, title, message, type, is_read, created_at;`,
+                [
+                    mentorRow.id,
+                    `${req.user.name} invited you to mentor project "${project.title}". Accept or decline from your Mentor Portal.`,
+                ]
+            );
+
+            const io = req.app.get("io");
+            if (io && notifRes.rows[0]) {
+                io.to(`user:${mentorRow.id}`).emit("notification:new", {
+                    id: notifRes.rows[0].id,
+                    _id: notifRes.rows[0].id,
+                    title: notifRes.rows[0].title,
+                    message: notifRes.rows[0].message,
+                    type: notifRes.rows[0].type,
+                    project: projectId,
+                    isRead: false,
+                    createdAt: notifRes.rows[0].created_at,
+                });
+            }
+
+            await logActivity({
+                projectId,
+                userId,
+                action: "MENTOR_INVITED",
+                description: `${req.user.name} sent a mentor invitation to ${mentorRow.name} for "${project.title}"`,
+                entityType: "Invitation",
+                entityId: insertRes.rows[0].id,
+                metadata: { mentorId: mentorRow.id, mentorName: mentorRow.name },
+            });
+
+            invalidateAllCaches();
+
+            return res.status(201).json({
+                success: true,
+                message: `Mentor invitation sent to ${mentorRow.name}. They will be assigned once they accept.`,
+                invitation: {
+                    ...insertRes.rows[0],
+                    recipient: { id: mentorRow.id, name: mentorRow.name, email: mentorRow.email },
+                },
             });
         }
 
-        if (getId(recipient) === getId(project.owner)) {
+        // Branch B: Standard Student Team Member Invitation
+        if (!email || typeof email !== "string") {
             return res.status(400).json({
                 success: false,
-                message: "Owner is already part of this project",
+                message: "Project ID and valid email are required",
             });
         }
 
-        if (isMember(project, recipient._id)) {
-            return res.status(409).json({
+        const cleanEmail = email.trim().toLowerCase();
+        if (cleanEmail.length > 254 || !EMAIL_PATTERN.test(cleanEmail)) {
+            return res.status(400).json({
                 success: false,
-                message: "User is already a member",
+                message: "Please provide a valid email address",
             });
         }
 
-        const existing = await Invitation.findOne({
-            project: projectId,
-            recipient: recipient._id,
-            status: "Pending",
-        });
+        // Check if user already exists
+        const userRes = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [cleanEmail]);
+        const recipientUser = userRes.rows[0];
 
-        if (existing) {
-            return res.status(409).json({
-                success: false,
-                message: "An invitation is already pending",
-            });
-        }
+        if (recipientUser) {
+            // Check if already in project
+            if (Number(recipientUser.id) === Number(project.owner_id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User is already the project owner",
+                });
+            }
 
-        const sender = await User.findById(req.user.id)
-            .select("name email");
-
-        if (!sender) {
-            return res.status(401).json({
-                success: false,
-                message: "Sender account not found",
-            });
-        }
-
-        invitation = await Invitation.create({
-            project: projectId,
-            sender: sender._id,
-            recipient: recipient._id,
-        });
-
-        try {
-            const notification = await Notification.create({
-                recipient: recipient._id,
-                sender: sender._id,
-                project: projectId,
-                invitation: invitation._id,
-                type: "team_invitation",
-                message: `${sender.name || "A user"} invited you to join ${project.name}.`,
-            });
-
-            await emitNotification(
-                req,
-                notification._id,
-                recipient._id
+            const memberCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                [projectId, recipientUser.id]
             );
-        } catch (notificationError) {
-            await Invitation.findByIdAndDelete(invitation._id);
-            throw notificationError;
+            if (memberCheck.rows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User is already a member of this project",
+                });
+            }
         }
+
+        // Check existing pending invitation
+        const pendingCheck = await pool.query(
+            "SELECT id FROM invitations WHERE project_id = $1 AND LOWER(recipient_email) = LOWER($2) AND status = 'Pending'",
+            [projectId, cleanEmail]
+        );
+        if (pendingCheck.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "An invitation is already pending for this email address",
+            });
+        }
+
+        const insertRes = await pool.query(`
+            INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, created_at)
+            VALUES ($1, $2, $3, $4, 'member', 'Pending', NOW())
+            RETURNING *;
+        `, [projectId, cleanEmail, recipientUser ? recipientUser.id : null, userId]);
+
+        // If recipient user exists, create notification
+        if (recipientUser) {
+            await pool.query(`
+                INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                VALUES ($1, 'Team Invitation', $2, 'invitation', FALSE, NOW())
+            `, [recipientUser.id, `You have been invited to join project ${project.title}`]);
+        }
+
+        invalidateAllCaches();
 
         return res.status(201).json({
             success: true,
-            message: "Invitation sent successfully. The user has been notified.",
-            invitation,
-            invitationUrl: invitationUrl(invitation._id),
+            message: "Invitation sent successfully",
+            invitation: insertRes.rows[0],
         });
     } catch (error) {
-        console.error("sendInvitation:", error);
-
-        if (error.code === 11000) {
-            return res.status(409).json({
-                success: false,
-                message: "An invitation is already pending",
-            });
-        }
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to send invitation",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// CANCEL INVITATION — OWNER ONLY
-// ==========================================
-
-export const cancelInvitation = async (req, res) => {
+// 3. CANCEL INVITATION (Strict Owner/Sender/Admin Authorization - Prevents IDOR)
+export const cancelInvitation = async (req, res, next) => {
     try {
-        const { projectId, invitationId } = req.params;
+        const projectId = parsePositiveInt(req.params.projectId);
+        const invitationId = parsePositiveInt(req.params.invitationId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
 
-        if (!validId(projectId) || !validId(invitationId)) {
+        if (!projectId || !invitationId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid ID",
+                message: "Valid project ID and invitation ID are required",
             });
         }
 
-        const project = await Project.findById(projectId);
+        const { rows } = await pool.query(`
+            SELECT i.id, i.project_id, i.sender_id, p.owner_id
+            FROM invitations i
+            JOIN projects p ON i.project_id = p.id
+            WHERE i.id = $1 AND i.project_id = $2;
+        `, [invitationId, projectId]);
 
-        if (!project) {
+        if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: "Project not found",
+                message: "Invitation not found",
             });
         }
 
-        if (!isOwner(project, req.user.id)) {
+        const inv = rows[0];
+        const isProjectOwner = Number(inv.owner_id) === Number(userId);
+        const isSender = Number(inv.sender_id) === Number(userId);
+
+        if (!isAdmin && !isProjectOwner && !isSender) {
             return res.status(403).json({
                 success: false,
-                message: "Only owner can cancel invitations",
+                message: "Only the project owner or invitation sender can cancel this invitation",
             });
         }
 
-        const invitation = await Invitation.findOneAndUpdate(
-            {
-                _id: invitationId,
-                project: projectId,
-                status: "Pending",
-            },
-            {
-                $set: {
-                    status: "Cancelled",
-                    respondedAt: new Date(),
-                },
-            },
-            { new: true }
-        );
+        await pool.query("DELETE FROM invitations WHERE id = $1 AND project_id = $2", [invitationId, projectId]);
+        invalidateAllCaches();
 
-        if (!invitation) {
-            return res.status(404).json({
-                success: false,
-                message: "Pending invitation not found",
-            });
-        }
-
-        await Notification.deleteMany({
-            invitation: invitation._id,
-            recipient: invitation.recipient,
-        });
-
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Invitation cancelled successfully",
+            message: "Invitation canceled successfully",
         });
     } catch (error) {
-        console.error("cancelInvitation:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to cancel invitation",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// GET MY RECEIVED INVITATIONS
-// ==========================================
-
-export const getMyInvitations = async (req, res) => {
+// 4. GET MY INVITATIONS
+export const getMyInvitations = async (req, res, next) => {
     try {
-        const invitations = await Invitation.find({
-            recipient: req.user.id,
-            status: "Pending",
-        })
-            .populate("sender", "name email")
-            .populate("project", "name description")
-            .sort({ createdAt: -1 });
+        const userId = req.user.id;
+        const userEmail = req.user.email;
 
-        return res.json({
+        const { rows } = await pool.query(`
+            SELECT i.*, p.title as project_name, u.name as sender_name, u.email as sender_email
+            FROM invitations i
+            JOIN projects p ON i.project_id = p.id
+            JOIN users u ON i.sender_id = u.id
+            WHERE (i.recipient_id = $1 OR LOWER(i.recipient_email) = LOWER($2))
+              AND i.status = 'Pending'
+            ORDER BY i.created_at DESC;
+        `, [userId, userEmail]);
+
+        const formatted = rows.map((i) => ({
+            id: i.id,
+            _id: i.id,
+            project: { id: i.project_id, _id: i.project_id, name: i.project_name, title: i.project_name },
+            sender: { id: i.sender_id, _id: i.sender_id, name: i.sender_name, email: i.sender_email },
+            role: i.role,
+            status: i.status,
+            createdAt: i.created_at,
+        }));
+
+        return res.status(200).json({
             success: true,
-            count: invitations.length,
-            invitations,
+            count: formatted.length,
+            invitations: formatted,
+            data: formatted,
         });
     } catch (error) {
-        console.error("getMyInvitations:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to load invitations",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// ACCEPT INVITATION
-// ==========================================
-
-export const acceptInvitation = async (req, res) => {
+// 5. ACCEPT INVITATION
+export const acceptInvitation = async (req, res, next) => {
     try {
-        const { invitationId } = req.params;
+        const invitationId = parsePositiveInt(req.params.invitationId);
+        const userId = req.user.id;
+        const userEmail = req.user.email;
 
-        if (!validId(invitationId)) {
+        if (!invitationId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid invitation ID",
+                message: "Valid invitation ID is required",
             });
         }
 
-        const invitation = await Invitation.findOneAndUpdate(
-            {
-                _id: invitationId,
-                recipient: req.user.id,
-                status: "Pending",
-            },
-            {
-                $set: {
-                    status: "Accepted",
-                    respondedAt: new Date(),
-                },
-            },
-            { new: true }
-        );
+        const { rows } = await pool.query(`
+            SELECT * FROM invitations
+            WHERE id = $1 AND (recipient_id = $2 OR LOWER(recipient_email) = LOWER($3))
+        `, [invitationId, userId, userEmail]);
 
-        if (!invitation) {
+        if (rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: "Invitation is no longer pending or does not belong to you",
+                message: "Invitation not found",
             });
         }
 
-        const project = await Project.findById(invitation.project);
+        const invitation = rows[0];
+        if (invitation.status !== "Pending") {
+            return res.status(400).json({
+                success: false,
+                message: `Invitation has already been ${invitation.status.toLowerCase()}`,
+            });
+        }
 
-        if (!project) {
-            await Invitation.updateOne(
-                { _id: invitation._id, status: "Accepted" },
-                { $set: { status: "Rejected" } }
+        // Mentor invitation acceptance -> officially assigns projects.mentor_id in a transaction
+        if (String(invitation.role || "").toLowerCase() === "mentor") {
+            if (!MENTOR_ROLES.has(String(req.user.role || "").toLowerCase()) || isDirector(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Only an active Faculty Mentor can accept a mentor invitation",
+                });
+            }
+
+            const client = await pool.connect();
+            try {
+                await client.query("BEGIN");
+                const projRes = await client.query(
+                    "SELECT id, title, owner_id FROM projects WHERE id = $1 FOR UPDATE;",
+                    [invitation.project_id]
+                );
+                if (projRes.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return res.status(404).json({ success: false, message: "Project no longer exists" });
+                }
+                const project = projRes.rows[0];
+
+                await client.query(
+                    "UPDATE projects SET mentor_id = $1, updated_at = NOW() WHERE id = $2;",
+                    [userId, project.id]
+                );
+                await client.query(
+                    "UPDATE invitations SET status = 'Accepted', recipient_id = $1 WHERE id = $2;",
+                    [userId, invitationId]
+                );
+                // Reject any other competing pending mentor invitations for the same project
+                await client.query(
+                    "UPDATE invitations SET status = 'Rejected' WHERE project_id = $1 AND role = 'mentor' AND status = 'Pending' AND id != $2;",
+                    [project.id, invitationId]
+                );
+
+                await logActivity({
+                    projectId: project.id,
+                    userId,
+                    action: "MENTOR_INVITATION_ACCEPTED",
+                    description: `${req.user.name} accepted the mentor invitation for "${project.title}"`,
+                    entityType: "Project",
+                    entityId: project.id,
+                    client,
+                });
+
+                const membersRes = await client.query(
+                    `SELECT DISTINCT uid FROM (
+                        SELECT owner_id AS uid FROM projects WHERE id = $1 AND owner_id IS NOT NULL
+                        UNION
+                        SELECT user_id AS uid FROM project_members WHERE project_id = $1
+                    ) t;`,
+                    [project.id]
+                );
+
+                for (const m of membersRes.rows) {
+                    await client.query(
+                        `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                         VALUES ($1, 'Mentor Assigned', $2, 'mentor_assignment', FALSE, NOW());`,
+                        [m.uid, `${req.user.name} accepted your mentor invitation and is now mentoring "${project.title}".`]
+                    );
+                }
+
+                await client.query("COMMIT");
+            } catch (txErr) {
+                await client.query("ROLLBACK");
+                throw txErr;
+            } finally {
+                client.release();
+            }
+
+            invalidateAllCaches();
+
+            return res.status(200).json({
+                success: true,
+                message: "Mentor invitation accepted. You are now the assigned mentor for this project.",
+            });
+        }
+
+        // Add to project_members with strict allowlisted role
+        const safeMemberRole = ALLOWED_MEMBER_ROLES.has(String(invitation.role || "").toLowerCase())
+            ? String(invitation.role).toLowerCase()
+            : "member";
+
+        await pool.query(`
+            INSERT INTO project_members (project_id, user_id, role)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (project_id, user_id) DO NOTHING;
+        `, [invitation.project_id, userId, safeMemberRole]);
+
+        // Mark invitation accepted
+        await pool.query("UPDATE invitations SET status = 'Accepted' WHERE id = $1", [invitationId]);
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: "Invitation accepted. You are now a member of the project.",
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// 6. REJECT INVITATION
+export const rejectInvitation = async (req, res, next) => {
+    try {
+        const invitationId = parsePositiveInt(req.params.invitationId);
+        const userId = req.user.id;
+        const userEmail = req.user.email;
+
+        if (!invitationId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid invitation ID is required",
+            });
+        }
+
+        const { rows } = await pool.query(`
+            SELECT * FROM invitations
+            WHERE id = $1 AND (recipient_id = $2 OR LOWER(recipient_email) = LOWER($3))
+        `, [invitationId, userId, userEmail]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Invitation not found",
+            });
+        }
+
+        if (rows[0].status !== "Pending") {
+            return res.status(400).json({
+                success: false,
+                message: `Invitation has already been ${rows[0].status.toLowerCase()}`,
+            });
+        }
+
+        await pool.query("UPDATE invitations SET status = 'Rejected' WHERE id = $1", [invitationId]);
+
+        if (String(rows[0].role || "").toLowerCase() === "mentor" && rows[0].sender_id) {
+            const pRes = await pool.query("SELECT title FROM projects WHERE id = $1", [rows[0].project_id]);
+            const projectTitle = pRes.rows[0]?.title || "your project";
+            await pool.query(
+                `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                 VALUES ($1, 'Mentor Invitation Declined', $2, 'mentor_invitation', FALSE, NOW());`,
+                [rows[0].sender_id, `${req.user.name} declined the mentor invitation for "${projectTitle}". You can invite another mentor.`]
             );
-
-            return res.status(404).json({
-                success: false,
-                message: "Project no longer exists",
-            });
         }
 
-        const user = await User.findById(req.user.id).select("name");
+        invalidateAllCaches();
 
-        const alreadyMember =
-            isOwner(project, req.user.id) ||
-            isMember(project, req.user.id);
-
-        if (!alreadyMember) {
-            project.members.addToSet(req.user.id);
-            await project.save();
-
-            await logActivity({
-                project: project._id,
-                user: req.user.id,
-                action: "invitation_accepted",
-                description: `${user?.name || "A member"} joined the project by accepting an invitation.`,
-                entityType: "Team",
-                entityId: req.user.id,
-                metadata: {
-                    invitationId: invitation._id,
-                    memberId: req.user.id,
-                },
-            });
-        }
-
-        await Notification.deleteMany({
-            invitation: invitation._id,
-            recipient: req.user.id,
-        });
-
-        const notification = await Notification.create({
-            recipient: invitation.sender,
-            sender: req.user.id,
-            project: project._id,
-            type: "team_added",
-            message: `${user?.name || "A user"} accepted your invitation to ${project.name}.`,
-        });
-
-        await emitNotification(
-            req,
-            notification._id,
-            invitation.sender
-        );
-
-        return res.json({
-            success: true,
-            message: `You joined ${project.name} successfully`,
-        });
-    } catch (error) {
-        console.error("acceptInvitation:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to accept invitation",
-        });
-    }
-};
-
-// ==========================================
-// REJECT INVITATION
-// ==========================================
-
-export const rejectInvitation = async (req, res) => {
-    try {
-        const { invitationId } = req.params;
-
-        if (!validId(invitationId)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid invitation ID",
-            });
-        }
-
-        const invitation = await Invitation.findOneAndUpdate(
-            {
-                _id: invitationId,
-                recipient: req.user.id,
-                status: "Pending",
-            },
-            {
-                $set: {
-                    status: "Rejected",
-                    respondedAt: new Date(),
-                },
-            },
-            { new: true }
-        );
-
-        if (!invitation) {
-            return res.status(404).json({
-                success: false,
-                message: "Pending invitation not found",
-            });
-        }
-
-        await Notification.deleteMany({
-            invitation: invitation._id,
-            recipient: req.user.id,
-        });
-
-        return res.json({
+        return res.status(200).json({
             success: true,
             message: "Invitation rejected",
         });
     } catch (error) {
-        console.error("rejectInvitation:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to reject invitation",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// OWNER REMOVES A MEMBER
-// ==========================================
-
-export const removeTeamMember = async (req, res) => {
+// 7. REMOVE TEAM MEMBER
+export const removeTeamMember = async (req, res, next) => {
     try {
-        const { projectId, memberId } = req.params;
+        const projectId = parsePositiveInt(req.params.projectId);
+        const memberId = parsePositiveInt(req.params.memberId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
 
-        if (!validId(projectId) || !validId(memberId)) {
+        if (!projectId || !memberId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid ID",
+                message: "Valid project ID and member ID are required",
             });
         }
 
-        const project = await Project.findById(projectId);
-
-        if (!project) {
+        const projRes = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (!isOwner(project, req.user.id)) {
+        const project = projRes.rows[0];
+        if (role === "mentor" || role === "faculty" || (!isAdmin && Number(project.owner_id) !== Number(userId))) {
             return res.status(403).json({
                 success: false,
-                message: "Only owner can remove members",
+                message: "Forbidden. Only the current Team Leader or an Administrator can remove squad members.",
             });
         }
 
-        if (getId(project.owner) === memberId) {
+        if (Number(project.owner_id) === Number(memberId)) {
             return res.status(400).json({
                 success: false,
-                message: "Owner cannot remove themselves. Transfer ownership first.",
+                message: "Cannot remove the project owner from the team",
             });
         }
 
-        if (!isMember(project, memberId)) {
-            return res.status(404).json({
-                success: false,
-                message: "Member not found",
-            });
-        }
-
-        const removedMember = await User.findById(memberId).select("name");
-
-        project.members.pull(memberId);
-        await project.save();
-
-        await logActivity({
-            project: project._id,
-            user: req.user.id,
-            action: "team_member_removed",
-            description: `${removedMember?.name || "A member"} was removed from the project.`,
-            entityType: "Team",
-            entityId: memberId,
-            metadata: {
-                memberId,
-                memberName: removedMember?.name || "Unknown",
-                reason: "owner_removed",
-            },
-        });
-
-        const notification = await Notification.create({
-            recipient: memberId,
-            sender: req.user.id,
-            project: projectId,
-            type: "team_removed",
-            message: `You were removed from project ${project.name}.`,
-        });
-
-        await emitNotification(
-            req,
-            notification._id,
-            memberId
+        await pool.query(
+            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+            [projectId, memberId]
         );
+        invalidateAllCaches();
+        evictUserFromProjectRooms(req, projectId, memberId);
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Member removed successfully",
+            message: "Team member removed successfully",
         });
     } catch (error) {
-        console.error("removeTeamMember:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to remove member",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// MEMBER LEAVES PROJECT
-// ==========================================
-
-export const leaveProject = async (req, res) => {
+// 7b. REMOVE PROJECT MENTOR
+export const removeProjectMentor = async (req, res, next) => {
     try {
-        const { projectId } = req.params;
+        const projectId = parsePositiveInt(req.params.projectId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
 
-        if (!validId(projectId)) {
+        if (!projectId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid project ID",
+                message: "Valid project ID is required",
             });
         }
 
-        const project = await Project.findById(projectId);
+        const projRes = await pool.query(
+            `SELECT p.*, m.name as mentor_name, m.email as mentor_email
+             FROM projects p
+             LEFT JOIN users m ON p.mentor_id = m.id
+             WHERE p.id = $1`,
+            [projectId]
+        );
 
-        if (!project) {
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (isOwner(project, req.user.id)) {
-            return res.status(400).json({
-                success: false,
-                message: "Owner cannot leave. Transfer ownership to a member first.",
-            });
-        }
-
-        if (!isMember(project, req.user.id)) {
+        const project = projRes.rows[0];
+        if (!isAdmin && Number(project.owner_id) !== Number(userId)) {
             return res.status(403).json({
                 success: false,
-                message: "You are not a member of this project",
+                message: "Only the project owner or an administrator can remove the faculty mentor",
             });
         }
 
-        const ownerId = getId(project.owner);
-        const leavingUser = await User.findById(req.user.id).select("name");
+        if (!project.mentor_id) {
+            return res.status(400).json({
+                success: false,
+                message: "This project does not have an assigned mentor to remove",
+            });
+        }
 
-        project.members.pull(req.user.id);
-        await project.save();
+        const removedMentorId = project.mentor_id;
+        const removedMentorName = project.mentor_name || "Faculty Mentor";
 
-        await logActivity({
-            project: project._id,
-            user: req.user.id,
-            action: "team_member_removed",
-            description: `${leavingUser?.name || "A member"} left the project.`,
-            entityType: "Team",
-            entityId: req.user.id,
-            metadata: {
-                memberId: req.user.id,
-                reason: "voluntary_leave",
-            },
-        });
-
-        const notification = await Notification.create({
-            recipient: ownerId,
-            sender: req.user.id,
-            project: projectId,
-            type: "team_removed",
-            message: `${leavingUser?.name || "A member"} left your project ${project.name}.`,
-        });
-
-        await emitNotification(
-            req,
-            notification._id,
-            ownerId
+        // Unassign mentor from project
+        await pool.query(
+            "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE id = $1",
+            [projectId]
         );
 
-        return res.json({
+        // Cancel any pending mentor invitations for this project
+        await pool.query(
+            "UPDATE invitations SET status = 'Rejected' WHERE project_id = $1 AND role = 'mentor' AND status = 'Pending'",
+            [projectId]
+        );
+
+        // Evict previous mentor from real-time project rooms
+        evictUserFromProjectRooms(req, projectId, removedMentorId);
+
+        // Send notification to the removed mentor
+        const notifRes = await pool.query(
+            `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+             VALUES ($1, 'Mentor Unassigned', $2, 'mentor_unassigned', FALSE, NOW())
+             RETURNING id, title, message, type, is_read, created_at;`,
+            [
+                removedMentorId,
+                `You have been unassigned as Faculty Mentor from project "${project.title}".`,
+            ]
+        );
+
+        const io = req.app.get("io");
+        if (io && notifRes.rows[0]) {
+            io.to(`user:${removedMentorId}`).emit("notification:new", {
+                id: notifRes.rows[0].id,
+                _id: notifRes.rows[0].id,
+                title: notifRes.rows[0].title,
+                message: notifRes.rows[0].message,
+                type: notifRes.rows[0].type,
+                project: projectId,
+                isRead: false,
+                createdAt: notifRes.rows[0].created_at,
+            });
+        }
+
+        // Notify team members that mentor was removed
+        const membersRes = await pool.query(
+            `SELECT DISTINCT uid FROM (
+                SELECT owner_id AS uid FROM projects WHERE id = $1 AND owner_id IS NOT NULL
+                UNION
+                SELECT user_id AS uid FROM project_members WHERE project_id = $1
+            ) t WHERE uid != $2;`,
+            [projectId, userId]
+        );
+
+        for (const m of membersRes.rows) {
+            const teamNotif = await pool.query(
+                `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                 VALUES ($1, 'Mentor Removed', $2, 'mentor_removed', FALSE, NOW())
+                 RETURNING id, title, message, type, is_read, created_at;`,
+                [
+                    m.uid,
+                    `${req.user.name} removed Faculty Mentor ${removedMentorName} from "${project.title}". The project currently has no mentor assigned.`,
+                ]
+            );
+            if (io && teamNotif.rows[0]) {
+                io.to(`user:${m.uid}`).emit("notification:new", {
+                    id: teamNotif.rows[0].id,
+                    _id: teamNotif.rows[0].id,
+                    title: teamNotif.rows[0].title,
+                    message: teamNotif.rows[0].message,
+                    type: teamNotif.rows[0].type,
+                    project: projectId,
+                    isRead: false,
+                    createdAt: teamNotif.rows[0].created_at,
+                });
+            }
+        }
+
+        await logActivity({
+            projectId,
+            userId,
+            action: "MENTOR_REMOVED",
+            description: `${req.user.name} removed Faculty Mentor ${removedMentorName} from "${project.title}"`,
+            entityType: "Project",
+            entityId: projectId,
+            metadata: { previousMentorId: removedMentorId, previousMentorName: removedMentorName },
+        });
+
+        invalidateAllCaches();
+
+        return res.status(200).json({
             success: true,
-            message: `You left ${project.name}`,
+            message: `Faculty Mentor ${removedMentorName} has been removed. The project currently has no mentor assigned.`,
         });
     } catch (error) {
-        console.error("leaveProject:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to leave project",
-        });
+        next(error);
     }
 };
 
-// ==========================================
-// TRANSFER OWNERSHIP
-// ==========================================
-
-export const transferOwnership = async (req, res) => {
+// 8. LEAVE PROJECT
+export const leaveProject = async (req, res, next) => {
     try {
-        const { projectId } = req.params;
-        const { newOwnerId } = req.body || {};
+        const projectId = parsePositiveInt(req.params.projectId);
+        const userId = req.user.id;
 
-        if (!validId(projectId) || !validId(newOwnerId)) {
+        if (!projectId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid ID",
+                message: "Valid project ID is required",
             });
         }
 
-        const project = await Project.findById(projectId);
-
-        if (!project) {
+        const projRes = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
             });
         }
 
-        if (!isOwner(project, req.user.id)) {
-            return res.status(403).json({
-                success: false,
-                message: "Only current owner can transfer ownership",
-            });
-        }
-
-        if (String(newOwnerId) === String(req.user.id)) {
+        if (Number(projRes.rows[0].owner_id) === Number(userId)) {
             return res.status(400).json({
                 success: false,
-                message: "You are already the owner",
+                message: "Project owner cannot leave the project without transferring ownership first",
             });
         }
 
-        if (!isMember(project, newOwnerId)) {
-            return res.status(400).json({
-                success: false,
-                message: "New owner must be an existing project member",
-            });
-        }
-
-        const previousOwnerId = getId(project.owner);
-
-        project.members.pull(newOwnerId);
-        project.members.addToSet(previousOwnerId);
-        project.owner = newOwnerId;
-
-        await project.save();
-
-        const newOwner = await User.findById(newOwnerId).select("name");
-
-        await logActivity({
-            project: project._id,
-            user: req.user.id,
-            action: "team_member_removed",
-            description: `Project ownership was transferred to ${newOwner?.name || "a team member"}.`,
-            entityType: "Team",
-            entityId: newOwnerId,
-            metadata: {
-                previousOwnerId,
-                newOwnerId,
-                reason: "ownership_transferred",
-            },
-        });
-
-        const notification = await Notification.create({
-            recipient: newOwnerId,
-            sender: previousOwnerId,
-            project: projectId,
-            type: "team_added",
-            message: `You are now the owner of ${project.name}.`,
-        });
-
-        await emitNotification(
-            req,
-            notification._id,
-            newOwnerId
+        await pool.query(
+            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+            [projectId, userId]
         );
+        invalidateAllCaches();
+        evictUserFromProjectRooms(req, projectId, userId);
 
-        return res.json({
+        return res.status(200).json({
             success: true,
-            message: "Ownership transferred successfully. You are now a regular member.",
+            message: "You have left the project",
         });
     } catch (error) {
-        console.error("transferOwnership:", error);
+        next(error);
+    }
+};
 
-        return res.status(500).json({
-            success: false,
-            message: "Unable to transfer ownership",
+// 9. TRANSFER OWNERSHIP
+export const transferOwnership = async (req, res, next) => {
+    try {
+        const projectId = parsePositiveInt(req.params.projectId);
+        const userId = req.user.id;
+        const { newOwnerId } = pickAllowedFields(req.body, ["newOwnerId"]);
+        const targetUserId = parsePositiveInt(newOwnerId);
+
+        if (!projectId || !targetUserId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID and new owner ID are required",
+            });
+        }
+
+        if (Number(targetUserId) === Number(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: "You are already the project owner",
+            });
+        }
+
+        const projRes = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+        if (projRes.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
+        }
+
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+        const currentOwnerId = projRes.rows[0].owner_id;
+
+        if (role === "mentor" || role === "faculty" || (!isAdmin && Number(currentOwnerId) !== Number(userId))) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden. Only the current Team Leader or an Administrator can transfer or switch team leadership.",
+            });
+        }
+
+        // Verify target user is an active member of this project
+        const targetMemberCheck = await pool.query(`
+            SELECT pm.user_id
+            FROM project_members pm
+            JOIN users u ON pm.user_id = u.id
+            WHERE pm.project_id = $1 AND pm.user_id = $2 AND u.is_active = TRUE;
+        `, [projectId, targetUserId]);
+
+        if (targetMemberCheck.rows.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Ownership can only be transferred to an existing active member of this project",
+            });
+        }
+
+        // Add old owner to members
+        if (currentOwnerId) {
+            await pool.query(`
+                INSERT INTO project_members (project_id, user_id, role)
+                VALUES ($1, $2, 'member')
+                ON CONFLICT (project_id, user_id) DO UPDATE SET role = 'member';
+            `, [projectId, currentOwnerId]);
+        }
+
+        // Remove new owner from regular members if there
+        await pool.query(
+            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+            [projectId, targetUserId]
+        );
+
+        // Update owner
+        await pool.query(
+            "UPDATE projects SET owner_id = $1, updated_at = NOW() WHERE id = $2",
+            [targetUserId, projectId]
+        );
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: "Ownership transferred successfully",
         });
+    } catch (error) {
+        next(error);
     }
 };

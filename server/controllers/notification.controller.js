@@ -1,65 +1,61 @@
+import pool from "../config/db.js";
+import { formatNotification, parsePositiveInt } from "../utils/formatters.js";
 
-import Notification from "../models/Notification.js";
-
-const validId = (id) =>
-    typeof id === "string" && /^[0-9a-fA-F]{24}$/.test(id);
-
-// GET MY NOTIFICATIONS
-export const getNotifications = async (req, res) => {
+// 1. GET NOTIFICATIONS
+export const getNotifications = async (req, res, next) => {
     try {
-        const notifications = await Notification.find({
-            recipient: req.user.id,
-        })
-            .populate("sender", "name email")
-            .populate("project", "name")
-            .populate("task", "title")
-            .populate("invitation", "status")
-            .sort({ createdAt: -1 })
-            .limit(50);
+        const userId = req.user.id;
 
-        const unreadCount = await Notification.countDocuments({
-            recipient: req.user.id,
-            isRead: false,
-        });
+        const { rows: notifications } = await pool.query(`
+            SELECT id, user_id, title, message, type, is_read, created_at
+            FROM notifications
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT 100;
+        `, [userId]);
+
+        const countRes = await pool.query(`
+            SELECT COUNT(*) AS unread_count
+            FROM notifications
+            WHERE user_id = $1 AND is_read = FALSE;
+        `, [userId]);
+
+        const unreadCount = Number(countRes.rows[0]?.unread_count || 0);
+        const formatted = notifications.map(formatNotification);
 
         return res.status(200).json({
             success: true,
+            count: formatted.length,
             unreadCount,
-            count: notifications.length,
-            notifications,
+            notifications: formatted,
+            data: formatted,
         });
     } catch (error) {
-        console.error("Notifications Error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to load notifications",
-        });
+        next(error);
     }
 };
 
-// MARK ONE AS READ
-export const markNotificationRead = async (req, res) => {
+// 2. MARK NOTIFICATION AS READ
+export const markNotificationRead = async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const notificationId = parsePositiveInt(req.params.id);
+        const userId = req.user.id;
 
-        if (!validId(id)) {
+        if (!notificationId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid notification ID",
+                message: "Valid notification ID is required",
             });
         }
 
-        const notification = await Notification.findOneAndUpdate(
-            {
-                _id: id,
-                recipient: req.user.id,
-            },
-            { isRead: true },
-            { new: true }
-        );
+        const updateRes = await pool.query(`
+            UPDATE notifications
+            SET is_read = TRUE
+            WHERE id = $1 AND user_id = $2
+            RETURNING *;
+        `, [notificationId, userId]);
 
-        if (!notification) {
+        if (updateRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Notification not found",
@@ -69,58 +65,53 @@ export const markNotificationRead = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: "Notification marked as read",
-            notification,
+            notification: formatNotification(updateRes.rows[0]),
         });
     } catch (error) {
-        console.error("Mark Notification Error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to update notification",
-        });
+        next(error);
     }
 };
 
-// MARK ALL AS READ
-export const markAllNotificationsRead = async (req, res) => {
+// 3. MARK ALL NOTIFICATIONS AS READ
+export const markAllNotificationsRead = async (req, res, next) => {
     try {
-        await Notification.updateMany(
-            { recipient: req.user.id, isRead: false },
-            { isRead: true }
-        );
+        const userId = req.user.id;
+
+        await pool.query(`
+            UPDATE notifications
+            SET is_read = TRUE
+            WHERE user_id = $1 AND is_read = FALSE;
+        `, [userId]);
 
         return res.status(200).json({
             success: true,
             message: "All notifications marked as read",
         });
     } catch (error) {
-        console.error("Mark All Notifications Error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to update notifications",
-        });
+        next(error);
     }
 };
 
-// DELETE NOTIFICATION
-export const deleteNotification = async (req, res) => {
+// 4. DELETE NOTIFICATION
+export const deleteNotification = async (req, res, next) => {
     try {
-        const { id } = req.params;
+        const notificationId = parsePositiveInt(req.params.id);
+        const userId = req.user.id;
 
-        if (!validId(id)) {
+        if (!notificationId) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid notification ID",
+                message: "Valid notification ID is required",
             });
         }
 
-        const notification = await Notification.findOneAndDelete({
-            _id: id,
-            recipient: req.user.id,
-        });
+        const deleteRes = await pool.query(`
+            DELETE FROM notifications
+            WHERE id = $1 AND user_id = $2
+            RETURNING id;
+        `, [notificationId, userId]);
 
-        if (!notification) {
+        if (deleteRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Notification not found",
@@ -132,11 +123,6 @@ export const deleteNotification = async (req, res) => {
             message: "Notification deleted successfully",
         });
     } catch (error) {
-        console.error("Delete Notification Error:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to delete notification",
-        });
+        next(error);
     }
 };

@@ -10,10 +10,12 @@ import {
 } from "../controllers/task.controller.js";
 
 import protect from "../middleware/auth.middleware.js";
+import { blockDirector } from "../middleware/directorGuard.js";
 
 const router = express.Router();
 
 router.use(protect);
+router.use(blockDirector("Director operates in executive view-only mode and does not access task operations."));
 
 router.post("/", createTask);
 router.get("/", getTasks);

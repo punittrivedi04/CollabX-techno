@@ -6,10 +6,16 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon --max-old-space-size=256 server.js",
+    "build": "node --check server.js",
+    "seed": "node scripts/seed-supabase.js",
+    "db:init": "node scripts/init-db.js",
+    "db:export": "node scripts/db-export.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "compression": "^1.8.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -19,6 +25,7 @@
     "mongoose": "^8.9.5",
     "morgan": "^1.10.0",
     "node-cron": "^4.6.0",
+    "pg": "^8.23.1",
     "resend": "^6.37.0",
     "socket.io": "^4.8.1"
   },

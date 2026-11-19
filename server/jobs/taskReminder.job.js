@@ -1,136 +1,69 @@
-
 import cron from "node-cron";
-import Task from "../models/Task.js";
-import Notification from "../models/Notification.js";
+import pool from "../config/db.js";
 
 let isRunning = false;
 
-const sendTaskNotification = async (io, task, flagField, message) => {
-    const recipientId = task.assignedTo || task.createdBy;
-
-    if (!recipientId) return;
-
-    const claimedAt = new Date();
-
-    // Atomically claim this reminder to prevent duplicate notifications.
-    const claimedTask = await Task.findOneAndUpdate(
-        {
-            _id: task._id,
-            dueDate: task.dueDate,
-            assignedTo: task.assignedTo || null,
-            [flagField]: null,
-            status: { $ne: "Completed" },
-        },
-        {
-            $set: { [flagField]: claimedAt },
-        },
-        { new: true }
-    );
-
-    if (!claimedTask) return;
-
-    try {
-        const notification = await Notification.create({
-            recipient: recipientId,
-            sender: null,
-            project: task.project,
-            task: task._id,
-            type: "reminder",
-            message,
-        });
-
-        const populatedNotification = await Notification.findById(
-            notification._id
-        )
-            .populate("sender", "name email")
-            .populate("project", "name")
-            .populate("task", "title dueDate status");
-
-        // Use the same private room and event as existing live notifications.
-        io.to(`user:${String(recipientId)}`).emit(
-            "notification:new",
-            populatedNotification
-        );
-    } catch (error) {
-        // Allow a retry if notification creation fails.
-        await Task.updateOne(
-            {
-                _id: task._id,
-                [flagField]: claimedAt,
-            },
-            {
-                $set: { [flagField]: null },
-            }
-        );
-
-        throw error;
-    }
-};
-
-const checkTaskReminders = async (io) => {
+export const checkTaskReminders = async (io) => {
     if (isRunning) return;
-
     isRunning = true;
 
     try {
-        const now = new Date();
-        const reminderLimit = new Date(
-            now.getTime() + 24 * 60 * 60 * 1000
-        );
+        // Find tasks due within 24 hours that are not completed
+        const { rows: dueTasks } = await pool.query(`
+            SELECT t.id, t.title, t.due_date, t.assigned_to, t.created_by, t.project_id,
+                   p.title as project_title
+            FROM tasks t
+            JOIN projects p ON t.project_id = p.id
+            WHERE t.status != 'Completed'
+              AND t.due_date IS NOT NULL
+              AND t.due_date <= NOW() + INTERVAL '24 hours'
+              AND t.due_date >= NOW()
+            LIMIT 50;
+        `);
 
-        // Tasks due within the next 24 hours.
-        const upcomingTasks = await Task.find({
-            dueDate: {
-                $gt: now,
-                $lte: reminderLimit,
-            },
-            status: { $ne: "Completed" },
-            reminderSentAt: null,
-        }).select(
-            "_id title project assignedTo createdBy dueDate status reminderSentAt"
-        );
+        for (const task of dueTasks) {
+            const recipientId = task.assigned_to || task.created_by;
+            if (!recipientId) continue;
 
-        for (const task of upcomingTasks) {
-            await sendTaskNotification(
-                io,
-                task,
-                "reminderSentAt",
-                `Reminder: "${task.title}" is due within 24 hours.`
-            );
-        }
+            const message = `Task "${task.title}" is due soon (${new Date(task.due_date).toLocaleDateString()}).`;
 
-        // Tasks whose deadlines have already passed.
-        const overdueTasks = await Task.find({
-            dueDate: { $lte: now },
-            status: { $ne: "Completed" },
-            overdueNotifiedAt: null,
-        }).select(
-            "_id title project assignedTo createdBy dueDate status overdueNotifiedAt"
-        );
+            // Check if reminder was already sent today
+            const existingNotif = await pool.query(`
+                SELECT 1 FROM notifications
+                WHERE user_id = $1 AND message = $2 AND created_at >= NOW() - INTERVAL '24 hours'
+            `, [recipientId, message]);
 
-        for (const task of overdueTasks) {
-            await sendTaskNotification(
-                io,
-                task,
-                "overdueNotifiedAt",
-                `Overdue: "${task.title}" has passed its due date.`
-            );
+            if (existingNotif.rows.length === 0) {
+                const insertRes = await pool.query(`
+                    INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                    VALUES ($1, 'Task Reminder', $2, 'reminder', FALSE, NOW())
+                    RETURNING *;
+                `, [recipientId, message]);
+
+                if (io) {
+                    io.to(`user:${recipientId}`).emit("collabx_notification_received", {
+                        notification: {
+                            id: insertRes.rows[0].id,
+                            _id: insertRes.rows[0].id,
+                            message,
+                            type: "reminder",
+                            isRead: false,
+                            createdAt: insertRes.rows[0].created_at,
+                        },
+                    });
+                }
+            }
         }
     } catch (error) {
-        console.error("Task Reminder Job Error:", error);
+        console.error("Task Reminder Job Error:", error.message);
     } finally {
         isRunning = false;
     }
 };
 
 export const startTaskReminderJob = (io) => {
-    console.log("Task Reminder Scheduler started.");
-
-    // Run once when the server starts.
-    checkTaskReminders(io);
-
-    // Then check every minute.
-    cron.schedule("* * * * *", () => {
+    // Run every hour
+    cron.schedule("0 * * * *", () => {
         checkTaskReminders(io);
     });
 };

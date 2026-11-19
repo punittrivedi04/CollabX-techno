@@ -1,9 +1,5 @@
 import { io } from "socket.io-client";
-
-const API_URL =
-    import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
-const SOCKET_URL = API_URL.replace(/\/api\/?$/, "");
+import { SOCKET_BASE_URL } from "./api";
 
 let socket = null;
 
@@ -37,12 +33,17 @@ export const connectSocket = (token) => {
         socket = null;
     }
 
-    socket = io(SOCKET_URL, {
-        auth: { token },
+    socket = io(SOCKET_BASE_URL, {
+        auth: (cb) => {
+            const currentToken =
+                localStorage.getItem("collabx_token") || token;
+            cb({ token: currentToken });
+        },
         autoConnect: true,
         reconnection: true,
-        reconnectionAttempts: 10,
+        reconnectionAttempts: 20,
         reconnectionDelay: 1000,
+        transports: ["websocket", "polling"],
     });
 
     attachNotificationBridge(socket);
@@ -66,7 +67,25 @@ export const getSocket = () => socket;
 
 export const disconnectSocket = () => {
     if (socket) {
-        socket.disconnect();
+        try {
+            socket.removeAllListeners();
+            socket.disconnect();
+        } catch (err) {
+            console.error("Error disconnecting socket:", err);
+        }
         socket = null;
     }
+};
+
+export const reconnectSocket = (token = null) => {
+    disconnectSocket();
+
+    const currentToken =
+        token || localStorage.getItem("collabx_token");
+    if (!currentToken) {
+        console.warn("Socket reconnection skipped: No auth token found.");
+        return null;
+    }
+
+    return connectSocket(currentToken);
 };

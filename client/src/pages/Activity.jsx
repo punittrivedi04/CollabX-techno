@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import axios from "axios";
+import api from "../services/api";
 import {
   Activity as ActivityIcon,
   FolderKanban,
@@ -20,9 +20,9 @@ import {
   CalendarDays,
   ListFilter,
   LoaderCircle,
+  ChevronDown,
 } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const LIMIT = 20;
 
 const FILTERS = ["All", "Project", "Task", "Team"];
@@ -31,62 +31,52 @@ const ACTION_CONFIG = {
   project_created: {
     label: "Project Created",
     icon: FolderPlus,
-    color: "text-violet-400",
-    bg: "bg-violet-500/10",
+    badge: "border border-[#C5D8B6] dark:border-[#2B3F22] bg-[#EEF6E6] dark:bg-[#1B2A16] text-[#2C3A35] dark:text-slate-200",
   },
   project_updated: {
     label: "Project Updated",
     icon: Pencil,
-    color: "text-blue-400",
-    bg: "bg-blue-500/10",
+    badge: "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300",
   },
   project_deleted: {
     label: "Project Deleted",
     icon: Trash2,
-    color: "text-red-400",
-    bg: "bg-red-500/10",
+    badge: "border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300",
   },
   task_created: {
     label: "Task Created",
     icon: CheckSquare,
-    color: "text-cyan-400",
-    bg: "bg-cyan-500/10",
+    badge: "border border-[#C9D8CE] dark:border-[#24322B] bg-[#E8F0EA] dark:bg-[#18261F] text-[#2C3A35] dark:text-slate-200",
   },
   task_updated: {
     label: "Task Updated",
     icon: Pencil,
-    color: "text-blue-400",
-    bg: "bg-blue-500/10",
+    badge: "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300",
   },
   task_completed: {
     label: "Task Completed",
     icon: CheckCircle2,
-    color: "text-emerald-400",
-    bg: "bg-emerald-500/10",
+    badge: "border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]",
   },
   task_assigned: {
     label: "Task Assigned",
     icon: UserPlus,
-    color: "text-amber-400",
-    bg: "bg-amber-500/10",
+    badge: "border border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A] text-[#42504B] dark:text-slate-300",
   },
   team_member_added: {
     label: "Member Added",
     icon: UserPlus,
-    color: "text-emerald-400",
-    bg: "bg-emerald-500/10",
+    badge: "border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]",
   },
   team_member_removed: {
     label: "Team Updated",
     icon: UserMinus,
-    color: "text-orange-400",
-    bg: "bg-orange-500/10",
+    badge: "border border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A] text-[#42504B] dark:text-slate-300",
   },
   invitation_accepted: {
     label: "Invitation Accepted",
     icon: CheckCircle2,
-    color: "text-emerald-400",
-    bg: "bg-emerald-500/10",
+    badge: "border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]",
   },
 };
 
@@ -114,12 +104,8 @@ const getToken = () => {
 
 const formatDate = (date) => {
   if (!date) return "Date unavailable";
-
   const parsed = new Date(date);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return "Date unavailable";
-  }
+  if (Number.isNaN(parsed.getTime())) return "Date unavailable";
 
   return parsed.toLocaleString("en-IN", {
     day: "numeric",
@@ -132,9 +118,7 @@ const formatDate = (date) => {
 
 const timeAgo = (date) => {
   if (!date) return "";
-
   const timestamp = new Date(date).getTime();
-
   if (Number.isNaN(timestamp)) return "";
 
   const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
@@ -157,8 +141,7 @@ const getActionConfig = (action) =>
   ACTION_CONFIG[action] || {
     label: action?.replaceAll("_", " ") || "Activity",
     icon: ActivityIcon,
-    color: "text-indigo-400",
-    bg: "bg-indigo-500/10",
+    badge: "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300",
   };
 
 export default function Activity() {
@@ -168,12 +151,6 @@ export default function Activity() {
   const [filter, setFilter] = useState("All");
 
   const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({
-    total: 0,
-    totalPages: 0,
-    hasNextPage: false,
-    hasPreviousPage: false,
-  });
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -198,30 +175,19 @@ export default function Activity() {
     setError("");
 
     try {
-      const headers = {
-        Authorization: `Bearer ${token}`,
-      };
-
-      // Fetch projects for project selector.
-      const projectResponse = await axios.get(`${API_URL}/projects`, {
-        headers,
-      });
+      const projectResponse = await api.get("/projects");
 
       const projectData =
         projectResponse.data?.projects || projectResponse.data?.data || [];
 
-      setProjects(Array.isArray(projectData) ? projectData : []);
+      const projectList = Array.isArray(projectData) ? projectData : [];
+      setProjects(projectList);
 
-      let projectList = Array.isArray(projectData) ? projectData : [];
-
-      // Fetch activities for all accessible projects.
       const requests = projectList.map((project) => {
         const projectId = getProjectId(project);
-
         if (!projectId) return Promise.resolve(null);
 
-        return axios.get(`${API_URL}/activities/project/${projectId}`, {
-          headers,
+        return api.get(`/activities/project/${projectId}`, {
           params: {
             page: 1,
             limit: LIMIT,
@@ -237,24 +203,21 @@ export default function Activity() {
         if (result.status !== "fulfilled" || !result.value) return;
 
         const data = result.value.data;
-
         if (data?.success && Array.isArray(data.activities)) {
           combinedActivities.push(...data.activities);
         }
       });
 
-      // Avoid duplicate records and sort newest first.
       const uniqueActivities = Array.from(
-        new Map(combinedActivities.map((item) => [item._id, item])).values(),
+        new Map(combinedActivities.map((item) => [item.id || item._id, item])).values(),
       ).sort(
         (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          new Date(b.createdAt || b.created_at).getTime() -
+          new Date(a.createdAt || a.created_at).getTime(),
       );
 
       setActivities(uniqueActivities);
     } catch (err) {
-      console.error("Activity fetch error:", err);
-
       setError(
         err.response?.data?.message ||
           "Unable to load activities. Please try again.",
@@ -279,14 +242,13 @@ export default function Activity() {
 
       const matchesProject =
         selectedProject === "All" ||
-        getProjectId(item.project) === selectedProject;
+        String(getProjectId(item.project)) === String(selectedProject);
 
       return matchesType && matchesProject;
     });
   }, [activities, filter, selectedProject]);
 
   const totalPages = Math.max(1, Math.ceil(filteredActivities.length / LIMIT));
-
   const currentPage = Math.min(page, totalPages);
 
   const paginatedActivities = filteredActivities.slice(
@@ -315,20 +277,14 @@ export default function Activity() {
   };
 
   return (
-    <div className="min-h-screen space-y-7 pb-10 text-white">
-      {/* HEADER */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+    <div className="space-y-6 pb-8 text-[#141A18] dark:text-slate-100">
+      {/* Header Bar */}
+      <div className="flex flex-col justify-between gap-4 rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs sm:flex-row sm:items-center sm:p-6">
         <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-400">
-            <ActivityIcon size={14} />
+          <span className="inline-block rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300">
             Workspace Insights
-          </div>
-
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Activity Timeline
-          </h1>
-
-          <p className="mt-2 text-sm text-slate-400">
+          </span>
+          <p className="mt-1.5 text-sm font-medium text-[#5C6B66] dark:text-[#94A89D]">
             Every important update across your projects, tasks and team.
           </p>
         </div>
@@ -336,114 +292,106 @@ export default function Activity() {
         <button
           onClick={() => fetchActivities(true)}
           disabled={refreshing || loading}
-          className="inline-flex w-fit items-center gap-2 rounded-xl border border-white/10 bg-slate-900 px-4 py-3 text-sm font-medium text-slate-300 transition hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex w-fit items-center gap-2 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-2xs disabled:opacity-50"
         >
-          <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+          <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
           Refresh
         </button>
       </div>
 
-      {/* STATS */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {/* Bento Stat Cards */}
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         {[
           {
             label: "Total Activities",
             value: stats.total,
-            icon: ActivityIcon,
-            color: "text-indigo-400",
-            bg: "bg-indigo-500/10",
+            Icon: ActivityIcon,
+            badge: "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
+            bg: "border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815]",
           },
           {
             label: "Projects",
             value: stats.projects,
-            icon: FolderKanban,
-            color: "text-violet-400",
-            bg: "bg-violet-500/10",
+            Icon: FolderKanban,
+            badge: "border border-[#E2DFD5] dark:border-[#2D362B] bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
+            bg: "border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A]",
           },
           {
             label: "Tasks",
             value: stats.tasks,
-            icon: CheckSquare,
-            color: "text-cyan-400",
-            bg: "bg-cyan-500/10",
+            Icon: CheckSquare,
+            badge: "border border-[#2E8B63]/25 bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]",
+            bg: "border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815]",
           },
           {
             label: "Team",
             value: stats.team,
-            icon: Users,
-            color: "text-emerald-400",
-            bg: "bg-emerald-500/10",
+            Icon: Users,
+            badge: "border border-[#E2DFD5] dark:border-[#2D362B] bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
+            bg: "border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A]",
           },
-        ].map((stat) => {
-          const Icon = stat.icon;
-
-          return (
-            <div
-              key={stat.label}
-              className="group rounded-2xl border border-white/[0.07] bg-slate-900/70 p-4 transition hover:-translate-y-1 hover:border-indigo-500/30 sm:p-5"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-slate-400 sm:text-sm">
-                  {stat.label}
-                </p>
-
-                <div className={`rounded-xl p-2 ${stat.bg} ${stat.color}`}>
-                  <Icon size={18} />
-                </div>
+        ].map(({ label, value, Icon, badge, bg }) => (
+          <div
+            key={label}
+            className={`rounded-[28px] border ${bg} p-5 shadow-2xs`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                {label}
+              </p>
+              <div
+                className={`flex h-9 w-9 items-center justify-center rounded-full ${badge}`}
+              >
+                <Icon size={17} />
               </div>
-
-              <p className="mt-4 text-3xl font-bold tracking-tight">
-                {stat.value}
-              </p>
-
-              <p className="mt-1 text-[11px] text-slate-500">
-                Recorded in workspace
-              </p>
             </div>
-          );
-        })}
+
+            <p className="mt-3 text-3xl font-extrabold tracking-tight text-[#141A18] dark:text-slate-100">
+              {value}
+            </p>
+          </div>
+        ))}
       </div>
 
-      {/* ACTIVITY PANEL */}
-      <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-slate-900/60">
-        {/* PANEL HEADER */}
-        <div className="flex flex-col justify-between gap-4 border-b border-white/[0.07] p-5 lg:flex-row lg:items-center">
+      {/* Activity Panel */}
+      <div className="overflow-hidden rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] shadow-2xs">
+        <div className="flex flex-col justify-between gap-4 border-b border-[#E4ECE6] dark:border-[#1F2C26] p-6 lg:flex-row lg:items-center">
           <div>
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <CircleDot size={18} className="text-indigo-400" />
+            <h2 className="flex items-center gap-2 text-base font-extrabold text-[#141A18] dark:text-slate-100">
+              <CircleDot size={18} className="text-[#2E8B63] dark:text-[#4ADE80]" />
               Recent Activity
             </h2>
-
-            <p className="mt-1 text-xs text-slate-500">
-              A chronological record of workspace events
+            <p className="mt-0.5 text-xs text-[#5C6B66] dark:text-[#94A89D]">
+              Chronological log of workspace events
             </p>
           </div>
 
-          {/* PROJECT FILTER */}
           <div className="flex flex-wrap items-center gap-2">
-            <ListFilter size={16} className="text-slate-500" />
+            <ListFilter size={16} className="text-[#5C6B66] dark:text-[#94A89D]" />
 
-            <select
-              value={selectedProject}
-              onChange={(e) => changeProject(e.target.value)}
-              className="max-w-[220px] rounded-xl border border-white/10 bg-slate-950 px-3 py-2.5 text-xs text-slate-300 outline-none transition focus:border-indigo-500"
-            >
-              <option value="All">All Projects</option>
-
-              {projects.map((project) => (
-                <option
-                  key={getProjectId(project)}
-                  value={getProjectId(project)}
-                >
-                  {project.name || project.title || "Untitled Project"}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                value={selectedProject}
+                onChange={(e) => changeProject(e.target.value)}
+                className="max-w-[220px] appearance-none rounded-full border border-[#D5E0D8] dark:border-[#24322B] bg-white dark:bg-[#0C120F] py-2.5 pl-4 pr-10 text-xs font-bold text-[#141A18] dark:text-slate-100 shadow-2xs outline-none transition focus:border-[#2E8B63] dark:focus:border-[#22C55E] cursor-pointer"
+              >
+                <option value="All">All Projects</option>
+                {projects.map((project) => (
+                  <option
+                    key={getProjectId(project)}
+                    value={getProjectId(project)}
+                  >
+                    {project.name || project.title || "Untitled Project"}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#5C6B66] dark:text-[#94A89D]" />
+            </div>
           </div>
         </div>
 
-        {/* FILTER TABS */}
-        <div className="flex flex-wrap gap-2 border-b border-white/[0.07] px-5 py-4">
+        {/* Filter Pills */}
+        <div className="flex flex-wrap gap-2 border-b border-[#E4ECE6] dark:border-[#1F2C26] px-6 py-4">
           {FILTERS.map((item) => {
             const active = filter === item;
 
@@ -451,10 +399,10 @@ export default function Activity() {
               <button
                 key={item}
                 onClick={() => changeFilter(item)}
-                className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                className={`rounded-full px-4 py-2 text-xs font-bold transition ${
                   active
-                    ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20"
-                    : "bg-slate-800/70 text-slate-400 hover:bg-slate-700 hover:text-white"
+                    ? "bg-[#1E2422] dark:bg-[#1D2D24] dark:ring-1 dark:ring-[#A3E635]/35 text-white shadow-2xs"
+                    : "border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300 hover:border-[#1E2422]/40 hover:text-[#141A18] dark:hover:text-slate-100"
                 }`}
               >
                 {item}
@@ -463,81 +411,54 @@ export default function Activity() {
           })}
         </div>
 
-        {/* CONTENT */}
-        <div className="p-5">
+        {/* Content */}
+        <div className="p-6">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20">
-              <LoaderCircle
-                size={34}
-                className="animate-spin text-indigo-400"
-              />
-
-              <p className="mt-4 text-sm font-medium text-slate-300">
+              <LoaderCircle size={32} className="animate-spin text-[#2E8B63] dark:text-[#4ADE80]" />
+              <p className="mt-4 text-sm font-bold text-[#141A18] dark:text-slate-100">
                 Loading workspace activity...
-              </p>
-
-              <p className="mt-1 text-xs text-slate-500">
-                Fetching updates from your projects
               </p>
             </div>
           ) : error ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="rounded-2xl bg-red-500/10 p-4 text-red-400">
-                <AlertCircle size={30} />
+              <div className="rounded-full bg-red-100 dark:bg-red-950/60 p-4 text-red-600 dark:text-red-400">
+                <AlertCircle size={28} />
               </div>
-
-              <h3 className="mt-4 font-semibold">Unable to load activity</h3>
-
-              <p className="mt-2 max-w-sm text-sm text-slate-400">{error}</p>
-
+              <h3 className="mt-4 font-bold text-[#141A18] dark:text-slate-100">
+                Unable to load activity
+              </h3>
+              <p className="mt-1.5 max-w-sm text-sm text-[#5C6B66] dark:text-[#94A89D]">{error}</p>
               <button
                 onClick={() => fetchActivities()}
-                className="mt-5 rounded-xl bg-indigo-500 px-5 py-2.5 text-sm font-semibold transition hover:bg-indigo-400"
+                className="mt-5 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-xs font-bold"
               >
                 Try Again
               </button>
             </div>
           ) : paginatedActivities.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="rounded-2xl border border-white/10 bg-slate-800/70 p-5 text-slate-500">
-                <ActivityIcon size={34} />
+              <div className="rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] p-5 text-[#5C6B66] dark:text-[#94A89D]">
+                <ActivityIcon size={32} />
               </div>
-
-              <h3 className="mt-5 text-base font-semibold">
+              <h3 className="mt-4 text-base font-bold text-[#141A18] dark:text-slate-100">
                 No activity found
               </h3>
-
-              <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">
+              <p className="mt-1.5 max-w-sm text-sm text-[#5C6B66] dark:text-[#94A89D]">
                 Project updates, task changes and team activities will appear
-                here automatically as your workspace evolves.
+                here automatically.
               </p>
-
-              {(filter !== "All" || selectedProject !== "All") && (
-                <button
-                  onClick={() => {
-                    setFilter("All");
-                    setSelectedProject("All");
-                    setPage(1);
-                  }}
-                  className="mt-5 text-sm font-semibold text-indigo-400 hover:text-indigo-300"
-                >
-                  Clear filters
-                </button>
-              )}
             </div>
           ) : (
             <>
-              {/* TIMELINE */}
               <div className="relative">
-                <div className="absolute bottom-5 left-[19px] top-5 w-px bg-gradient-to-b from-indigo-500/40 via-slate-700 to-transparent" />
+                <div className="absolute bottom-5 left-[19px] top-5 w-0.5 bg-[#D4DFD7] dark:bg-[#1F2A24]" />
 
-                <div className="space-y-1">
+                <div className="space-y-2">
                   {paginatedActivities.map((item) => {
                     const config = getActionConfig(item.action);
                     const Icon = config.icon;
-
                     const userName = item.user?.name || "Unknown User";
-
                     const projectName =
                       typeof item.project === "object"
                         ? item.project?.name
@@ -545,44 +466,44 @@ export default function Activity() {
 
                     return (
                       <div
-                        key={item._id}
-                        className="group relative flex gap-4 rounded-xl p-3 transition hover:bg-white/[0.025] sm:p-4"
+                        key={item.id || item._id}
+                        className="relative flex gap-4 rounded-2xl p-3.5 transition hover:bg-white dark:hover:bg-[#1E2A24] sm:p-4"
                       >
-                        <div className="relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.07] bg-slate-950 shadow-lg">
-                          <Icon size={18} className={config.color} />
+                        <div className="relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300 shadow-2xs">
+                          <Icon size={17} />
                         </div>
 
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-white">
+                            <span className="text-sm font-bold text-[#141A18] dark:text-slate-100">
                               {userName}
                             </span>
 
                             <span
-                              className={`rounded-md px-2 py-1 text-[10px] font-semibold ${config.bg} ${config.color}`}
+                              className={`rounded-full px-3 py-0.5 text-[11px] font-semibold ${config.badge}`}
                             >
                               {config.label}
                             </span>
                           </div>
 
-                          <p className="mt-2 text-sm leading-6 text-slate-300">
+                          <p className="mt-1.5 text-sm leading-relaxed text-[#42504B] dark:text-slate-300">
                             {item.description}
                           </p>
 
-                          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-slate-500">
-                            <span className="flex items-center gap-1.5">
+                          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-medium text-[#5C6B66] dark:text-[#94A89D]">
+                            <span className="flex items-center gap-1">
                               <Clock3 size={12} />
-                              {timeAgo(item.createdAt)}
+                              {timeAgo(item.createdAt || item.created_at)}
                             </span>
 
-                            <span className="flex items-center gap-1.5">
+                            <span className="flex items-center gap-1">
                               <CalendarDays size={12} />
-                              {formatDate(item.createdAt)}
+                              {formatDate(item.createdAt || item.created_at)}
                             </span>
 
                             {projectName && (
-                              <span className="flex items-center gap-1.5">
-                                <FolderKanban size={12} />
+                              <span className="flex items-center gap-1 font-bold text-[#141A18] dark:text-slate-100">
+                                <FolderKanban size={12} className="text-[#2E8B63] dark:text-[#4ADE80]" />
                                 {projectName}
                               </span>
                             )}
@@ -594,17 +515,16 @@ export default function Activity() {
                 </div>
               </div>
 
-              {/* PAGINATION */}
-              <div className="mt-6 flex flex-col justify-between gap-4 border-t border-white/[0.07] pt-5 sm:flex-row sm:items-center">
-                <p className="text-xs text-slate-500">
+              {/* Pagination */}
+              <div className="mt-6 flex flex-col justify-between gap-4 border-t border-[#E4ECE6] dark:border-[#1F2C26] pt-5 sm:flex-row sm:items-center">
+                <p className="text-xs font-medium text-[#5C6B66] dark:text-[#94A89D]">
                   Showing{" "}
-                  <span className="font-semibold text-slate-300">
-                    {(currentPage - 1) * LIMIT + 1}
-                    {" - "}
+                  <span className="font-bold text-[#141A18] dark:text-slate-100">
+                    {(currentPage - 1) * LIMIT + 1} -{" "}
                     {Math.min(currentPage * LIMIT, filteredActivities.length)}
                   </span>{" "}
                   of{" "}
-                  <span className="font-semibold text-slate-300">
+                  <span className="font-bold text-[#141A18] dark:text-slate-100">
                     {filteredActivities.length}
                   </span>{" "}
                   activities
@@ -614,12 +534,12 @@ export default function Activity() {
                   <button
                     disabled={currentPage === 1}
                     onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                    className="rounded-lg border border-white/10 p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                    className="rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] p-2 disabled:opacity-40"
                   >
-                    <ChevronLeft size={17} />
+                    <ChevronLeft size={16} />
                   </button>
 
-                  <span className="min-w-20 text-center text-xs text-slate-400">
+                  <span className="min-w-20 text-center text-xs font-bold text-[#141A18] dark:text-slate-100">
                     Page {currentPage} of {totalPages}
                   </span>
 
@@ -628,21 +548,15 @@ export default function Activity() {
                     onClick={() =>
                       setPage((prev) => Math.min(totalPages, prev + 1))
                     }
-                    className="rounded-lg border border-white/10 p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                    className="rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] p-2 disabled:opacity-40"
                   >
-                    <ChevronRight size={17} />
+                    <ChevronRight size={16} />
                   </button>
                 </div>
               </div>
             </>
           )}
         </div>
-      </div>
-
-      {/* FOOTER */}
-      <div className="flex items-center justify-center gap-2 text-center text-[11px] text-slate-600">
-        <ActivityIcon size={13} />
-        CollabX Workspace Activity
       </div>
     </div>
   );

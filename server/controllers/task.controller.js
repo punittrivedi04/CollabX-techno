@@ -1,581 +1,564 @@
+import pool from "../config/db.js";
+import { formatTask, parsePositiveInt, pickAllowedFields } from "../utils/formatters.js";
+import { readCache, invalidateAllCaches } from "../utils/microCache.js";
 
-import Task from "../models/Task.js";
-import Project from "../models/Project.js";
-import User from "../models/User.js";
-import logActivity from "../utils/activityLogger.js";
+const VALID_STATUSES = ["Todo", "In Progress", "In Review", "Completed"];
+const VALID_PRIORITIES = ["Low", "Medium", "High"];
+const MAX_TITLE_LEN = 150;
+const MAX_DESC_LEN = 2000;
 
-const STATUSES = ["Todo", "In Progress", "In Review", "Completed"];
-const PRIORITIES = ["Low", "Medium", "High"];
-
-const validId = (id) =>
-  typeof id === "string" && /^[0-9a-fA-F]{24}$/.test(id);
-
-const validDate = (date) =>
-  date === null || !Number.isNaN(new Date(date).getTime());
-
-const hasProjectAccess = (project, userId) => {
-  const id = userId.toString();
-
-  return (
-    project.owner.toString() === id ||
-    project.members.some((member) => member.toString() === id)
-  );
-};
-
-const populateTask = (query) =>
-  query
-    .populate("project", "name status")
-    .populate("assignedTo", "name email")
-    .populate("createdBy", "name email");
-
-const handleError = (res, error) => {
-  console.error("Task Controller Error:", error);
-
-  if (
-    error.name === "ValidationError" ||
-    error.name === "CastError"
-  ) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
-  }
-
-  return res.status(500).json({
-    success: false,
-    message: "Server error while processing task",
-  });
-};
-
-// CREATE TASK
-export const createTask = async (req, res) => {
-  try {
-    const {
-      title,
-      description,
-      projectId,
-      assignedTo,
-      status,
-      priority,
-      dueDate,
-    } = req.body;
-
+const hasTaskAccess = async (task, user) => {
+    const userId = Number(user.id);
+    const role = String(user.role || "").toLowerCase();
+    const isAdmin = role === "admin" || role === "coordinator";
+    if (isAdmin) return true;
     if (
-      typeof title !== "string" ||
-      !title.trim() ||
-      title.trim().length > 150
+        Number(task.assigned_to) === userId ||
+        Number(task.created_by) === userId ||
+        Number(task.project_owner_id) === userId ||
+        Number(task.project_mentor_id) === userId
     ) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid task title is required (max 150 characters)",
-      });
+        return true;
     }
-
-    if (
-      description !== undefined &&
-      (typeof description !== "string" || description.length > 2000)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Description must be text with maximum 2000 characters",
-      });
-    }
-
-    if (!validId(projectId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid project ID",
-      });
-    }
-
-    if (status !== undefined && !STATUSES.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid task status",
-      });
-    }
-
-    if (priority !== undefined && !PRIORITIES.includes(priority)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid task priority",
-      });
-    }
-
-    if (dueDate !== undefined && !validDate(dueDate)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid due date",
-      });
-    }
-
-    const project = await Project.findById(projectId);
-
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        message: "Project not found",
-      });
-    }
-
-    if (!hasProjectAccess(project, req.user.id)) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have access to this project",
-      });
-    }
-
-    let assignedUser = null;
-
-    if (assignedTo !== undefined && assignedTo !== null && assignedTo !== "") {
-      if (!validId(assignedTo)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid assigned user ID",
-        });
-      }
-
-      const isProjectMember =
-        project.owner.toString() === assignedTo ||
-        project.members.some((member) => member.toString() === assignedTo);
-
-      if (!isProjectMember) {
-        return res.status(400).json({
-          success: false,
-          message: "Assigned user must belong to this project",
-        });
-      }
-
-      assignedUser = await User.findById(assignedTo);
-
-      if (!assignedUser) {
-        return res.status(404).json({
-          success: false,
-          message: "Assigned user not found",
-        });
-      }
-    }
-
-    const task = await Task.create({
-      title: title.trim(),
-      description: description?.trim() || "",
-      project: project._id,
-      assignedTo: assignedUser?._id || null,
-      createdBy: req.user.id,
-      status: status || "Todo",
-      priority: priority || "Medium",
-      dueDate: dueDate || null,
-    });
-
-    await logActivity({
-      project: project._id,
-      user: req.user.id,
-      action: "task_created",
-      description: `Created task "${task.title}"`,
-      entityType: "Task",
-      entityId: task._id,
-      metadata: {
-        taskTitle: task.title,
-      },
-    });
-
-    const populatedTask = await populateTask(Task.findById(task._id));
-
-    return res.status(201).json({
-      success: true,
-      message: "Task created successfully",
-      task: populatedTask,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
-};
-
-// GET ALL TASKS
-export const getTasks = async (req, res) => {
-  try {
-    const filter = {};
-
-    if (req.query.projectId) {
-      if (!validId(req.query.projectId)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid project ID",
-        });
-      }
-
-      const project = await Project.findById(req.query.projectId);
-
-      if (!project) {
-        return res.status(404).json({
-          success: false,
-          message: "Project not found",
-        });
-      }
-
-      if (!hasProjectAccess(project, req.user.id)) {
-        return res.status(403).json({
-          success: false,
-          message: "You do not have access to this project",
-        });
-      }
-
-      filter.project = project._id;
-    } else {
-      const projects = await Project.find({
-        $or: [
-          { owner: req.user.id },
-          { members: req.user.id },
-        ],
-      }).select("_id");
-
-      filter.project = { $in: projects.map((project) => project._id) };
-    }
-
-    const tasks = await populateTask(
-      Task.find(filter).sort({ createdAt: -1 })
+    const memberCheck = await pool.query(
+        "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+        [task.project_id, userId]
     );
-
-    return res.status(200).json({
-      success: true,
-      count: tasks.length,
-      tasks,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
+    return memberCheck.rows.length > 0;
 };
 
-// GET SINGLE TASK
-export const getTaskById = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!validId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid task ID",
-      });
-    }
-
-    const task = await Task.findById(id);
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: "Task not found",
-      });
-    }
-
-    const project = await Project.findById(task.project);
-
-    if (!project || !hasProjectAccess(project, req.user.id)) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have access to this task",
-      });
-    }
-
-    const populatedTask = await populateTask(Task.findById(id));
-
-    return res.status(200).json({
-      success: true,
-      task: populatedTask,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
+const normalizeStatus = (status) => {
+    if (!status) return "Todo";
+    const s = String(status).trim().toLowerCase();
+    if (s === "todo" || s === "to do") return "Todo";
+    if (s === "in_progress" || s === "in progress") return "In Progress";
+    if (s === "in_review" || s === "in review") return "In Review";
+    if (s === "completed" || s === "done") return "Completed";
+    return VALID_STATUSES.includes(status) ? status : "Todo";
 };
 
-// UPDATE TASK
-export const updateTask = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    if (!validId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid task ID",
-      });
-    }
-
-    const task = await Task.findById(id);
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: "Task not found",
-      });
-    }
-
-    const project = await Project.findById(task.project);
-
-    if (!project || !hasProjectAccess(project, req.user.id)) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have access to this task",
-      });
-    }
-
-    const userId = req.user.id.toString();
-    const isOwner = project.owner.toString() === userId;
-    const isCreator = task.createdBy.toString() === userId;
-    const isAssignee = task.assignedTo?.toString() === userId;
-
-    const isManager = isOwner || isCreator;
-
-    const allowedFields = [
-      "title",
-      "description",
-      "assignedTo",
-      "status",
-      "priority",
-      "dueDate",
-    ];
-
-    const receivedFields = Object.keys(req.body);
-
-    if (
-      receivedFields.length === 0 ||
-      receivedFields.some((field) => !allowedFields.includes(field))
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or empty update fields",
-      });
-    }
-
-    if (!isManager) {
-      if (!isAssignee || receivedFields.some((field) => field !== "status")) {
-        return res.status(403).json({
-          success: false,
-          message: "You are not allowed to edit this task",
-        });
-      }
-    }
-
-    const {
-      title,
-      description,
-      assignedTo,
-      status,
-      priority,
-      dueDate,
-    } = req.body;
-
-    // Capture previous values before updating.
-    const oldStatus = task.status;
-
-    const oldDueDate = task.dueDate
-      ? new Date(task.dueDate).getTime()
-      : null;
-
-    const oldAssignee = task.assignedTo
-      ? task.assignedTo.toString()
-      : "";
-
-    if (title !== undefined) {
-      if (
-        typeof title !== "string" ||
-        !title.trim() ||
-        title.trim().length > 150
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid task title",
-        });
-      }
-
-      task.title = title.trim();
-    }
-
-    if (description !== undefined) {
-      if (
-        typeof description !== "string" ||
-        description.length > 2000
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid task description",
-        });
-      }
-
-      task.description = description.trim();
-    }
-
-    if (status !== undefined) {
-      if (!STATUSES.includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid task status",
-        });
-      }
-
-      task.status = status;
-      task.completedAt =
-        status === "Completed" ? new Date() : null;
-    }
-
-    if (priority !== undefined) {
-      if (!PRIORITIES.includes(priority)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid task priority",
-        });
-      }
-
-      task.priority = priority;
-    }
-
-    if (dueDate !== undefined) {
-      if (!validDate(dueDate)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid due date",
-        });
-      }
-
-      task.dueDate = dueDate;
-    }
-
-    if (assignedTo !== undefined) {
-      if (assignedTo === null || assignedTo === "") {
-        task.assignedTo = null;
-      } else {
-        if (!validId(assignedTo)) {
-          return res.status(400).json({
-            success: false,
-            message: "Invalid assigned user ID",
-          });
-        }
-
-        const isProjectMember =
-          project.owner.toString() === assignedTo ||
-          project.members.some((member) => member.toString() === assignedTo);
-
-        if (!isProjectMember) {
-          return res.status(400).json({
-            success: false,
-            message: "Assigned user must belong to this project",
-          });
-        }
-
-        const userExists = await User.exists({ _id: assignedTo });
-
-        if (!userExists) {
-          return res.status(404).json({
-            success: false,
-            message: "Assigned user not found",
-          });
-        }
-
-        task.assignedTo = assignedTo;
-      }
-    }
-
-    const newDueDate = task.dueDate
-      ? new Date(task.dueDate).getTime()
-      : null;
-
-    const newAssignee = task.assignedTo
-      ? task.assignedTo.toString()
-      : "";
-
-    // Reset reminder flags when due date or assignee changes.
-    if (
-      oldDueDate !== newDueDate ||
-      oldAssignee !== newAssignee
-    ) {
-      task.reminderSentAt = null;
-      task.overdueNotifiedAt = null;
-    }
-
-    await task.save();
-
-    // Determine the most relevant timeline event.
-    let action = "task_updated";
-    let activityDescription = `Updated task "${task.title}"`;
-
-    if (oldStatus !== "Completed" && task.status === "Completed") {
-      action = "task_completed";
-      activityDescription = `Completed task "${task.title}"`;
-    } else if (oldAssignee !== newAssignee && newAssignee) {
-      action = "task_assigned";
-      activityDescription = `Assigned task "${task.title}"`;
-    }
-
-    await logActivity({
-      project: project._id,
-      user: req.user.id,
-      action,
-      description: activityDescription,
-      entityType: "Task",
-      entityId: task._id,
-      metadata: {
-        taskTitle: task.title,
-        updatedFields: receivedFields,
-      },
-    });
-
-    const updatedTask = await populateTask(Task.findById(task._id));
-
-    return res.status(200).json({
-      success: true,
-      message: "Task updated successfully",
-      task: updatedTask,
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
+const normalizePriority = (priority) => {
+    if (!priority) return "Medium";
+    const p = String(priority).trim().toLowerCase();
+    if (p === "low") return "Low";
+    if (p === "medium") return "Medium";
+    if (p === "high") return "High";
+    return VALID_PRIORITIES.includes(priority) ? priority : "Medium";
 };
 
-// DELETE TASK
-export const deleteTask = async (req, res) => {
-  try {
-    const { id } = req.params;
+// 1. CREATE TASK
+export const createTask = async (req, res, next) => {
+    try {
+        // Strict field allowlist: ignores injected created_by, owner_id, role, id, etc.
+        const {
+            title,
+            description,
+            projectId,
+            assignedTo,
+            status,
+            priority,
+            dueDate,
+        } = pickAllowedFields(req.body, [
+            "title",
+            "description",
+            "projectId",
+            "assignedTo",
+            "status",
+            "priority",
+            "dueDate",
+        ]);
 
-    if (!validId(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid task ID",
-      });
+        if (!title || typeof title !== "string" || !title.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Task title is required",
+            });
+        }
+
+        if (title.trim().length > MAX_TITLE_LEN) {
+            return res.status(400).json({
+                success: false,
+                message: `Task title cannot exceed ${MAX_TITLE_LEN} characters`,
+            });
+        }
+
+        let cleanDescription = "";
+        if (description !== undefined && description !== null) {
+            if (typeof description !== "string") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Task description must be a string",
+                });
+            }
+            cleanDescription = description.trim();
+            if (cleanDescription.length > MAX_DESC_LEN) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Task description cannot exceed ${MAX_DESC_LEN} characters`,
+                });
+            }
+        }
+
+        const projId = parsePositiveInt(projectId);
+        if (!projId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid projectId is required",
+            });
+        }
+
+        let assigneeId = null;
+        if (assignedTo !== undefined && assignedTo !== null && assignedTo !== "") {
+            assigneeId = parsePositiveInt(assignedTo);
+            if (!assigneeId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Valid assignedTo user ID is required",
+                });
+            }
+        }
+
+        let parsedDueDate = null;
+        if (dueDate !== undefined && dueDate !== null && dueDate !== "") {
+            const d = new Date(dueDate);
+            if (Number.isNaN(d.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid dueDate format",
+                });
+            }
+            parsedDueDate = d;
+        }
+
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+
+        // Check project access
+        const projRes = await pool.query(
+            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1",
+            [projId]
+        );
+        if (projRes.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
+        }
+
+        const project = projRes.rows[0];
+        const isOwner = Number(project.owner_id) === Number(userId);
+        const isMentor = Number(project.mentor_id) === Number(userId);
+
+        if (!isAdmin && !isOwner && !isMentor) {
+            const memberCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                [projId, userId]
+            );
+            if (memberCheck.rows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You do not have permission to add tasks to this project",
+                });
+            }
+        }
+
+        if (assigneeId) {
+            const assigneeCheck = await pool.query(
+                "SELECT id FROM users WHERE id = $1 AND is_active = TRUE",
+                [assigneeId]
+            );
+            if (assigneeCheck.rows.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Assigned user does not exist or is inactive",
+                });
+            }
+        }
+
+        const taskStatus = normalizeStatus(status);
+        const taskPriority = normalizePriority(priority);
+        const completedAt = taskStatus === "Completed" ? new Date() : null;
+
+        const insertRes = await pool.query(`
+            INSERT INTO tasks (project_id, title, description, status, priority, assigned_to, created_by, due_date, completed_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            RETURNING *;
+        `, [
+            projId,
+            title.trim(),
+            cleanDescription,
+            taskStatus,
+            taskPriority,
+            assigneeId,
+            userId,
+            parsedDueDate,
+            completedAt,
+        ]);
+
+        const task = insertRes.rows[0];
+        invalidateAllCaches();
+
+        // Fetch user info for response
+        let assigneeObj = null;
+        if (assigneeId) {
+            const uRes = await pool.query("SELECT id, name, email FROM users WHERE id = $1", [assigneeId]);
+            if (uRes.rows.length > 0) {
+                assigneeObj = { id: uRes.rows[0].id, _id: uRes.rows[0].id, name: uRes.rows[0].name, email: uRes.rows[0].email };
+            }
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: "Task created successfully",
+            task: formatTask(task, { id: project.id, _id: project.id, name: project.title, title: project.title }, assigneeObj, {
+                id: req.user.id,
+                _id: req.user.id,
+                name: req.user.name,
+                email: req.user.email,
+            }),
+        });
+    } catch (error) {
+        next(error);
     }
+};
 
-    const task = await Task.findById(id);
+// 2. GET TASKS (Strict Isolation + Bounded 3s Micro Cache)
+export const getTasks = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const role = String(req.user.role || "student").toLowerCase().trim();
+        const isAdmin = role === "admin" || role === "coordinator";
+        const { projectId, status } = req.query;
 
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: "Task not found",
-      });
+        let parsedProjectId = null;
+        if (projectId !== undefined && projectId !== "") {
+            parsedProjectId = parsePositiveInt(projectId);
+            if (!parsedProjectId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Valid projectId filter is required",
+                });
+            }
+        }
+
+        const normalizedStatus = status ? normalizeStatus(status) : "";
+        const cacheKey = `tasks:u:${userId}:r:${role}:p:${parsedProjectId || "all"}:s:${normalizedStatus || "all"}`;
+
+        const formattedTasks = await readCache.getOrSet(cacheKey, async () => {
+            let query = `
+                SELECT t.*, p.title as project_title,
+                       u_assignee.name as assignee_name, u_assignee.email as assignee_email,
+                       u_creator.name as creator_name, u_creator.email as creator_email
+                FROM tasks t
+                LEFT JOIN projects p ON t.project_id = p.id
+                LEFT JOIN users u_assignee ON t.assigned_to = u_assignee.id
+                LEFT JOIN users u_creator ON t.created_by = u_creator.id
+                WHERE (
+                    $1::boolean = TRUE OR
+                    t.assigned_to = $2 OR
+                    t.created_by = $2 OR
+                    p.owner_id = $2 OR
+                    p.mentor_id = $2 OR
+                    p.id IN (SELECT project_id FROM project_members WHERE user_id = $2)
+                )
+            `;
+            const params = [isAdmin, userId];
+            let paramIdx = 3;
+
+            if (parsedProjectId) {
+                query += ` AND t.project_id = $${paramIdx}`;
+                params.push(parsedProjectId);
+                paramIdx++;
+            }
+
+            if (normalizedStatus) {
+                query += ` AND t.status = $${paramIdx}`;
+                params.push(normalizedStatus);
+                paramIdx++;
+            }
+
+            query += " ORDER BY t.created_at DESC;";
+
+            const { rows: tasks } = await pool.query(query, params);
+            return tasks.map((t) => formatTask(t));
+        });
+
+        return res.status(200).json({
+            success: true,
+            count: formattedTasks.length,
+            tasks: formattedTasks,
+            data: formattedTasks,
+        });
+    } catch (error) {
+        next(error);
     }
+};
 
-    const project = await Project.findById(task.project);
+// 3. GET TASK BY ID (Strict Squad/Project Isolation)
+export const getTaskById = async (req, res, next) => {
+    try {
+        const taskId = parsePositiveInt(req.params.id);
+        if (!taskId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid task ID is required",
+            });
+        }
 
-    if (!project || !hasProjectAccess(project, req.user.id)) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have access to this task",
-      });
+        const { rows } = await pool.query(`
+            SELECT t.*, p.title as project_title, p.owner_id as project_owner_id, p.mentor_id as project_mentor_id,
+                   u_assignee.name as assignee_name, u_assignee.email as assignee_email,
+                   u_creator.name as creator_name, u_creator.email as creator_email
+            FROM tasks t
+            LEFT JOIN projects p ON t.project_id = p.id
+            LEFT JOIN users u_assignee ON t.assigned_to = u_assignee.id
+            LEFT JOIN users u_creator ON t.created_by = u_creator.id
+            WHERE t.id = $1;
+        `, [taskId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Task not found",
+            });
+        }
+
+        const task = rows[0];
+        const allowed = await hasTaskAccess(task, req.user);
+        if (!allowed) {
+            return res.status(403).json({
+                success: false,
+                message: "You do not have permission to view this task",
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            task: formatTask(task),
+        });
+    } catch (error) {
+        next(error);
     }
+};
 
-    const isOwner = project.owner.toString() === req.user.id.toString();
-    const isCreator = task.createdBy.toString() === req.user.id.toString();
+// 4. UPDATE TASK (Strict Squad/Project Authorization - Prevents IDOR)
+export const updateTask = async (req, res, next) => {
+    try {
+        const taskId = parsePositiveInt(req.params.id);
+        if (!taskId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid task ID is required",
+            });
+        }
 
-    if (!isOwner && !isCreator) {
-      return res.status(403).json({
-        success: false,
-        message: "Only the project owner or task creator can delete this task",
-      });
+        const { rows: taskRows } = await pool.query(`
+            SELECT t.*, p.owner_id as project_owner_id, p.mentor_id as project_mentor_id
+            FROM tasks t
+            LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.id = $1;
+        `, [taskId]);
+
+        if (taskRows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Task not found",
+            });
+        }
+
+        const existingTask = taskRows[0];
+        const allowed = await hasTaskAccess(existingTask, req.user);
+        if (!allowed) {
+            return res.status(403).json({
+                success: false,
+                message: "You do not have permission to update this task",
+            });
+        }
+
+        // Strict field allowlist: ignores injected created_by, project_id, owner_id, role, id, etc.
+        const {
+            title,
+            description,
+            status,
+            priority,
+            assignedTo,
+            dueDate,
+        } = pickAllowedFields(req.body, [
+            "title",
+            "description",
+            "status",
+            "priority",
+            "assignedTo",
+            "dueDate",
+        ]);
+
+        let newTitle = existingTask.title;
+        if (title !== undefined) {
+            if (typeof title !== "string" || !title.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Task title cannot be empty",
+                });
+            }
+            if (title.trim().length > MAX_TITLE_LEN) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Task title cannot exceed ${MAX_TITLE_LEN} characters`,
+                });
+            }
+            newTitle = title.trim();
+        }
+
+        let newDescription = existingTask.description;
+        if (description !== undefined) {
+            const cleanDesc = description === null ? "" : String(description).trim();
+            if (cleanDesc.length > MAX_DESC_LEN) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Task description cannot exceed ${MAX_DESC_LEN} characters`,
+                });
+            }
+            newDescription = cleanDesc;
+        }
+
+        const newStatus = status !== undefined ? normalizeStatus(status) : existingTask.status;
+        const newPriority = priority !== undefined ? normalizePriority(priority) : existingTask.priority;
+
+        let newAssignedTo = existingTask.assigned_to;
+        if (assignedTo !== undefined) {
+            if (assignedTo === null || assignedTo === "") {
+                newAssignedTo = null;
+            } else {
+                const parsedAssignee = parsePositiveInt(assignedTo);
+                if (!parsedAssignee) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Valid assignedTo user ID is required",
+                    });
+                }
+                const assigneeCheck = await pool.query(
+                    "SELECT id FROM users WHERE id = $1 AND is_active = TRUE",
+                    [parsedAssignee]
+                );
+                if (assigneeCheck.rows.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Assigned user does not exist or is inactive",
+                    });
+                }
+                newAssignedTo = parsedAssignee;
+            }
+        }
+
+        let newDueDate = existingTask.due_date;
+        if (dueDate !== undefined) {
+            if (dueDate === null || dueDate === "") {
+                newDueDate = null;
+            } else {
+                const d = new Date(dueDate);
+                if (Number.isNaN(d.getTime())) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Invalid dueDate format",
+                    });
+                }
+                newDueDate = d;
+            }
+        }
+
+        const completedAt = newStatus === "Completed" ? (existingTask.completed_at || new Date()) : (newStatus !== "Completed" ? null : existingTask.completed_at);
+
+        const updateRes = await pool.query(`
+            UPDATE tasks
+            SET title = $1,
+                description = $2,
+                status = $3,
+                priority = $4,
+                assigned_to = $5,
+                due_date = $6,
+                completed_at = $7,
+                updated_at = NOW()
+            WHERE id = $8
+            RETURNING *;
+        `, [
+            newTitle,
+            newDescription,
+            newStatus,
+            newPriority,
+            newAssignedTo,
+            newDueDate,
+            completedAt,
+            taskId,
+        ]);
+
+        const updated = updateRes.rows[0];
+        invalidateAllCaches();
+
+        // Fetch join info
+        const joinRes = await pool.query(`
+            SELECT p.title as project_title,
+                   u_assignee.name as assignee_name, u_assignee.email as assignee_email
+            FROM projects p
+            LEFT JOIN users u_assignee ON u_assignee.id = $2
+            WHERE p.id = $1;
+        `, [updated.project_id, updated.assigned_to]);
+
+        const extra = joinRes.rows[0] || {};
+        const populated = { ...updated, ...extra };
+
+        return res.status(200).json({
+            success: true,
+            message: "Task updated successfully",
+            task: formatTask(populated),
+        });
+    } catch (error) {
+        next(error);
     }
+};
 
-    await task.deleteOne();
+// 5. DELETE TASK (Strict Squad/Project Authorization - Prevents IDOR)
+export const deleteTask = async (req, res, next) => {
+    try {
+        const taskId = parsePositiveInt(req.params.id);
+        if (!taskId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid task ID is required",
+            });
+        }
 
-    return res.status(200).json({
-      success: true,
-      message: "Task deleted successfully",
-    });
-  } catch (error) {
-    return handleError(res, error);
-  }
+        const { rows } = await pool.query(`
+            SELECT t.*, p.owner_id as project_owner_id, p.mentor_id as project_mentor_id
+            FROM tasks t
+            LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.id = $1;
+        `, [taskId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Task not found",
+            });
+        }
+
+        const existingTask = rows[0];
+        const allowed = await hasTaskAccess(existingTask, req.user);
+        if (!allowed) {
+            return res.status(403).json({
+                success: false,
+                message: "You do not have permission to delete this task",
+            });
+        }
+
+        await pool.query("DELETE FROM tasks WHERE id = $1", [taskId]);
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: "Task deleted successfully",
+        });
+    } catch (error) {
+        next(error);
+    }
 };
