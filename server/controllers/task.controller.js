@@ -180,6 +180,30 @@ export const createTask = async (req, res, next) => {
         const taskPriority = normalizePriority(priority);
         const completedAt = taskStatus === "Completed" ? new Date() : null;
 
+        // Anti-Double Submit Protection (4-second idempotency window per project, title, and creator)
+        const duplicateTaskCheck = await pool.query(
+            `SELECT t.*, p.title as project_title,
+                    u_assignee.name as assignee_name, u_assignee.email as assignee_email,
+                    u_creator.name as creator_name, u_creator.email as creator_email
+             FROM tasks t
+             LEFT JOIN projects p ON t.project_id = p.id
+             LEFT JOIN users u_assignee ON t.assigned_to = u_assignee.id
+             LEFT JOIN users u_creator ON t.created_by = u_creator.id
+             WHERE t.project_id = $1 AND LOWER(TRIM(t.title)) = LOWER(TRIM($2))
+               AND t.created_by = $3
+               AND t.created_at > NOW() - INTERVAL '4 seconds'
+             ORDER BY t.created_at DESC LIMIT 1;`,
+            [projId, title.trim(), userId]
+        );
+        if (duplicateTaskCheck.rows.length > 0) {
+            return res.status(200).json({
+                success: true,
+                message: "Task created successfully",
+                task: formatTask(duplicateTaskCheck.rows[0]),
+                data: formatTask(duplicateTaskCheck.rows[0]),
+            });
+        }
+
         const insertRes = await pool.query(`
             INSERT INTO tasks (project_id, title, description, status, priority, assigned_to, created_by, due_date, completed_at, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())

@@ -101,6 +101,23 @@ export const createProject = async (req, res, next) => {
         const projectProgress = 0; // New projects strictly start with 0% progress
         const ownerId = req.user.id;
 
+        // Anti-Double Submit / Race Condition Protection (5-second idempotency window per owner & title)
+        const duplicateCheck = await pool.query(
+            `SELECT * FROM projects
+             WHERE owner_id = $1 AND LOWER(TRIM(title)) = LOWER(TRIM($2))
+               AND created_at > NOW() - INTERVAL '5 seconds'
+             ORDER BY created_at DESC LIMIT 1;`,
+            [ownerId, projectTitle]
+        );
+        if (duplicateCheck.rows.length > 0) {
+            return res.status(200).json({
+                success: true,
+                message: "Project created successfully",
+                project: formatProject(duplicateCheck.rows[0]),
+                data: formatProject(duplicateCheck.rows[0]),
+            });
+        }
+
         const insertRes = await pool.query(`
             INSERT INTO projects (title, description, status, priority, progress, deadline, owner_id, github_url, demo_url, ppt_url, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
