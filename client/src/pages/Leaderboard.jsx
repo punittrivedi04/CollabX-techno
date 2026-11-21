@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Award,
-  Calendar,
   CheckCircle2,
   Clock,
   Crown,
   ExternalLink,
-  FolderKanban,
   GraduationCap,
-  Info,
   Presentation,
   RefreshCw,
   Search,
@@ -31,13 +28,12 @@ import {
   getInitials,
   isValidHttpUrl,
 } from "../utils/portalHelpers";
-import { getEffectiveRole, getRoleDisplayLabel } from "../utils/roles";
+import { getRoleDisplayLabel } from "../utils/roles";
 import {
   EmptyState,
   ErrorAlert,
   LoadingState,
   Modal,
-  StatusBadge,
   SuccessAlert,
   portalPrimaryBtnClass,
   portalSecondaryBtnClass,
@@ -59,9 +55,18 @@ function rankProjects(list) {
   }));
 }
 
+function NeutralBadge({ children, className = "" }) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-md border border-black/12 bg-white px-2 py-0.5 text-[10px] font-bold text-neutral-800 dark:border-white/14 dark:bg-[#08080A] dark:text-neutral-200 ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
 export default function Leaderboard() {
   const { user } = useAuth();
-  const currentUserId = user?.id || user?._id;
 
   const [projects, setProjects] = useState([]);
   const [eligibleProjects, setEligibleProjects] = useState([]);
@@ -84,7 +89,6 @@ export default function Leaderboard() {
   const [submittingId, setSubmittingId] = useState(null);
   const [votingId, setVotingId] = useState(null);
 
-  // Fetch stars breakdown
   const fetchStarsBreakdown = useCallback(async (project) => {
     if (!project?.id) return;
     setStarsLoading(true);
@@ -116,13 +120,19 @@ export default function Leaderboard() {
     try {
       const [boardRes, eligibleRes] = await Promise.all([
         api.get("/leaderboard"),
-        api.get("/leaderboard/my-eligible").catch(() => ({ data: { projects: [] } })),
+        api
+          .get("/leaderboard/my-eligible")
+          .catch(() => ({ data: { projects: [] } })),
       ]);
 
       const list = boardRes.data?.projects || boardRes.data?.data || [];
       const rawProjects = Array.isArray(list) ? list : [];
       setProjects(rankProjects(rawProjects));
-      setEligibleProjects(eligibleRes.data?.projects || []);
+      setEligibleProjects(
+        Array.isArray(eligibleRes.data?.projects)
+          ? eligibleRes.data.projects
+          : [],
+      );
     } catch (err) {
       setError(getErrorMessage(err, "Unable to load College Leaderboard."));
     } finally {
@@ -134,10 +144,11 @@ export default function Leaderboard() {
     loadLeaderboard();
   }, [loadLeaderboard]);
 
-  // Keep selectedProject in sync with master projects list if open
   useEffect(() => {
     if (!selectedProject?.id) return;
-    const current = projects.find((p) => String(p.id) === String(selectedProject.id));
+    const current = projects.find(
+      (p) => String(p.id) === String(selectedProject.id),
+    );
     if (
       current &&
       (current.rank !== selectedProject.rank ||
@@ -148,7 +159,6 @@ export default function Leaderboard() {
     }
   }, [projects, selectedProject?.id]);
 
-  // Filter projects by search keyword while preserving true original rank
   const filteredProjects = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return projects;
@@ -176,7 +186,6 @@ export default function Leaderboard() {
     });
   }, [projects, search]);
 
-  // Real-time Socket.IO listeners
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -184,7 +193,9 @@ export default function Leaderboard() {
     const handleStarUpdate = ({ projectId, starCount }) => {
       setProjects((prev) => {
         const next = prev.map((p) =>
-          String(p.id) === String(projectId) ? { ...p, starCount: Number(starCount) } : p,
+          String(p.id) === String(projectId)
+            ? { ...p, starCount: Number(starCount) }
+            : p,
         );
         return rankProjects(next);
       });
@@ -211,7 +222,9 @@ export default function Leaderboard() {
         const next = prev.filter((p) => String(p.id) !== String(projectId));
         return rankProjects(next);
       });
-      setSelectedProject((prev) => (prev && String(prev.id) === String(projectId) ? null : prev));
+      setSelectedProject((prev) =>
+        prev && String(prev.id) === String(projectId) ? null : prev,
+      );
     };
 
     socket.on("leaderboard:star_update", handleStarUpdate);
@@ -225,18 +238,18 @@ export default function Leaderboard() {
     };
   }, [fetchStarsBreakdown, loadLeaderboard]);
 
-  // Toggle star vote
   const handleToggleStar = async (projectId) => {
     if (votingId) return;
     setVotingId(projectId);
     setError("");
 
-    // Optimistic UI update
     setProjects((prev) => {
       const next = prev.map((p) => {
         if (String(p.id) === String(projectId)) {
           const nextStarred = !p.isStarred;
-          const nextCount = nextStarred ? p.starCount + 1 : Math.max(0, p.starCount - 1);
+          const nextCount = nextStarred
+            ? (Number(p.starCount) || 0) + 1
+            : Math.max(0, (Number(p.starCount) || 0) - 1);
           return { ...p, isStarred: nextStarred, starCount: nextCount };
         }
         return p;
@@ -247,7 +260,9 @@ export default function Leaderboard() {
       setSelectedProject((prev) => ({
         ...prev,
         isStarred: !prev.isStarred,
-        starCount: !prev.isStarred ? prev.starCount + 1 : Math.max(0, prev.starCount - 1),
+        starCount: !prev.isStarred
+          ? (Number(prev.starCount) || 0) + 1
+          : Math.max(0, (Number(prev.starCount) || 0) - 1),
       }));
     }
 
@@ -264,9 +279,16 @@ export default function Leaderboard() {
         return rankProjects(next);
       });
       if (selectedProject && String(selectedProject.id) === String(projectId)) {
-        setSelectedProject((prev) => ({ ...prev, isStarred, starCount: Number(starCount) }));
+        setSelectedProject((prev) => ({
+          ...prev,
+          isStarred,
+          starCount: Number(starCount),
+        }));
       }
-      if (inspectingStarsProject && String(inspectingStarsProject.id) === String(projectId)) {
+      if (
+        inspectingStarsProject &&
+        String(inspectingStarsProject.id) === String(projectId)
+      ) {
         fetchStarsBreakdown(inspectingStarsProject);
       }
     } catch (err) {
@@ -277,7 +299,6 @@ export default function Leaderboard() {
     }
   };
 
-  // Submit project to leaderboard
   const handleSubmitProject = async (projectId) => {
     if (submittingId) return;
     setSubmittingId(projectId);
@@ -295,10 +316,10 @@ export default function Leaderboard() {
     }
   };
 
-  // Withdraw project from leaderboard
   const handleWithdrawProject = async (projectId) => {
     if (submittingId) return;
-    if (!window.confirm("Withdraw this project from the College Leaderboard?")) return;
+    if (!window.confirm("Withdraw this project from the College Leaderboard?"))
+      return;
     setSubmittingId(projectId);
     setError("");
     setSuccess("");
@@ -314,67 +335,84 @@ export default function Leaderboard() {
     }
   };
 
+  // #1 Gold, #2 Silver, #3 Bronze
   const getRankBadge = (rank) => {
     const num = Number(rank);
     if (num === 1) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/60 bg-gradient-to-r from-amber-500/20 to-yellow-400/20 px-3 py-1 text-xs font-black text-amber-700 dark:text-amber-300 shadow-sm">
-          <Trophy size={13} className="text-amber-500 fill-amber-500/20" />
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-amber-500/50 bg-amber-500/15 px-2.5 py-1 text-xs font-black tabular-nums text-amber-800 dark:border-amber-400/45 dark:bg-amber-400/15 dark:text-amber-300">
+          <Trophy
+            size={13}
+            strokeWidth={2}
+            className="text-amber-500 fill-amber-400/30"
+          />
           <span>#1</span>
         </span>
       );
     }
     if (num === 2) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 dark:border-slate-600 bg-gradient-to-r from-slate-200/70 to-slate-300/40 dark:from-slate-700/50 dark:to-slate-800/50 px-3 py-1 text-xs font-black text-slate-700 dark:text-slate-200 shadow-sm">
-          <Award size={13} className="text-slate-500 dark:text-slate-300" />
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-400/50 bg-slate-200/80 px-2.5 py-1 text-xs font-black tabular-nums text-slate-800 dark:border-slate-400/35 dark:bg-slate-400/15 dark:text-slate-200">
+          <Award
+            size={13}
+            strokeWidth={1.9}
+            className="text-slate-500 dark:text-slate-300"
+          />
           <span>#2</span>
         </span>
       );
     }
     if (num === 3) {
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-700/40 dark:border-amber-600/40 bg-gradient-to-r from-amber-700/15 to-amber-900/15 px-3 py-1 text-xs font-black text-amber-900 dark:text-amber-300 shadow-sm">
-          <Award size={13} className="text-amber-700 dark:text-amber-500" />
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-orange-700/35 bg-orange-500/12 px-2.5 py-1 text-xs font-black tabular-nums text-orange-900 dark:border-orange-400/35 dark:bg-orange-400/15 dark:text-orange-300">
+          <Award
+            size={13}
+            strokeWidth={1.85}
+            className="text-orange-700 dark:text-orange-400"
+          />
           <span>#3</span>
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-subtle)] px-2.5 py-1 text-xs font-extrabold text-[var(--text-secondary)] shadow-2xs">
+      <span className="inline-flex shrink-0 items-center rounded-md border border-black/10 bg-neutral-50 px-2.5 py-1 text-xs font-extrabold tabular-nums text-neutral-700 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-300">
         #{num || "-"}
       </span>
     );
   };
 
-  const myEligibleCount = eligibleProjects.filter((p) => !p.isOnLeaderboard).length;
+  const myEligibleCount = eligibleProjects.filter(
+    (p) => !p.isOnLeaderboard,
+  ).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-neutral-950 dark:text-white">
       {/* Hero Header */}
-      <div className="relative overflow-hidden rounded-[32px] border border-[var(--border-subtle)] bg-gradient-to-br from-[var(--bg-surface)] via-[var(--bg-surface-elevated)] to-[var(--bg-surface)] p-6 shadow-2xs sm:p-8">
-        <div className="relative z-10 flex flex-col justify-between gap-6 md:flex-row md:items-center">
+      <div className="rounded-2xl border border-black/12 bg-white p-6 shadow-2xs dark:border-white/12 dark:bg-[#08080A] sm:p-8">
+        <div className="flex flex-col justify-between gap-6 md:flex-row md:items-center">
           <div className="max-w-2xl">
-            <h1 className="text-2xl font-black tracking-tight text-[var(--text-primary)] sm:text-4xl">
+            <h1 className="text-2xl font-black tracking-tight text-neutral-950 dark:text-white sm:text-4xl">
               College Project Leaderboard
             </h1>
 
-            <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)] sm:text-sm">
-              Explore standout student projects completed across all squads. Dual-ranked by total peer &amp; faculty
-              stars, with newest competing projects naturally rewarded.
+            <p className="mt-2 text-xs leading-relaxed text-neutral-600 dark:text-neutral-400 sm:text-sm">
+              Explore standout student projects completed across all squads.
+              Dual-ranked by total peer &amp; faculty stars, with newest
+              competing projects naturally rewarded.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
             {eligibleProjects.length > 0 && (
               <button
                 type="button"
                 onClick={() => setShowSubmitModal(true)}
-                className={portalPrimaryBtnClass}
+                className={`${portalPrimaryBtnClass} w-full justify-center rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200 sm:w-auto`}
               >
-                <Sparkles size={14} /> Submit My Project
+                <Sparkles size={14} strokeWidth={1.85} />
+                <span>Submit My Project</span>
                 {myEligibleCount > 0 && (
-                  <span className="ml-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                  <span className="ml-1 rounded-md border border-white/20 bg-white/15 px-2 py-0.5 text-[10px] font-bold tabular-nums dark:border-black/15 dark:bg-black/10">
                     {myEligibleCount} Ready
                   </span>
                 )}
@@ -385,9 +423,14 @@ export default function Leaderboard() {
               type="button"
               onClick={() => loadLeaderboard(true)}
               disabled={loading}
-              className={portalSecondaryBtnClass}
+              className={`${portalSecondaryBtnClass} w-full justify-center rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#101014] dark:!text-white dark:hover:!bg-[#18181E] sm:w-auto`}
             >
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
+              <RefreshCw
+                size={14}
+                strokeWidth={1.85}
+                className={loading ? "animate-spin" : ""}
+              />
+              <span>Refresh</span>
             </button>
           </div>
         </div>
@@ -397,32 +440,34 @@ export default function Leaderboard() {
       <SuccessAlert message={success} onDismiss={() => setSuccess("")} />
 
       {/* Search & Statistics Bar */}
-      <div className="flex flex-col justify-between gap-4 rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 shadow-2xs sm:flex-row sm:items-center">
+      <div className="flex flex-col justify-between gap-3 rounded-2xl border border-black/12 bg-white p-4 shadow-2xs dark:border-white/12 dark:bg-[#08080A] sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search
-            size={16}
-            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+            size={15}
+            strokeWidth={1.85}
+            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-neutral-500"
           />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search projects by title, keywords, team leader, or roll number..."
-            className="w-full rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-input)] py-2.5 pl-10 pr-4 text-xs font-medium text-[var(--text-primary)] outline-none transition placeholder:text-[var(--text-muted)] focus:border-[#15803D] dark:focus:border-[#22C55E]"
+            className="w-full rounded-xl border border-black/12 bg-neutral-50 py-2.5 pl-10 pr-9 text-xs font-medium text-neutral-950 outline-none transition placeholder:text-neutral-400 focus:border-black/35 dark:border-white/12 dark:bg-[#101014] dark:text-white dark:placeholder:text-neutral-500 dark:focus:border-white/35"
           />
           {search && (
             <button
               type="button"
               onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-md p-1 text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-white/10 dark:hover:text-white"
             >
-              <X size={14} />
+              <X size={14} strokeWidth={2} />
             </button>
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 text-xs font-bold text-[var(--text-secondary)]">
-          <span className="rounded-full bg-[var(--bg-surface-elevated)] px-3 py-1">
+        <div className="flex shrink-0 items-center gap-2 text-xs font-bold tabular-nums text-neutral-700 dark:text-neutral-300">
+          <span className="rounded-xl border border-black/10 bg-neutral-50 px-3 py-1.5 dark:border-white/10 dark:bg-[#101014]">
             {search.trim()
               ? `${filteredProjects.length} of ${projects.length} project(s)`
               : `${projects.length} project(s) ranked`}
@@ -434,130 +479,157 @@ export default function Leaderboard() {
       {loading ? (
         <LoadingState label="Loading College Leaderboard ranking..." />
       ) : filteredProjects.length === 0 ? (
-        <EmptyState
-          icon={Trophy}
-          title={search ? "No matching projects found" : "No projects published yet"}
-          description={
-            search
-              ? "Try adjusting your search query or clear the filter."
-              : "Completed projects submitted by their Project Leaders will be ranked here. Only 100% finished projects are eligible!"
-          }
-          action={
-            eligibleProjects.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => setShowSubmitModal(true)}
-                className={portalPrimaryBtnClass}
-              >
-                <Sparkles size={14} /> Submit a Completed Project
-              </button>
-            ) : null
-          }
-        />
+        <div className="rounded-2xl border border-black/12 bg-white p-6 dark:border-white/12 dark:bg-[#08080A]">
+          <EmptyState
+            icon={Trophy}
+            title={
+              search
+                ? "No matching projects found"
+                : "No projects published yet"
+            }
+            description={
+              search
+                ? "Try adjusting your search query or clear the filter."
+                : "Completed projects submitted by their Project Leaders will be ranked here. Only 100% finished projects are eligible!"
+            }
+            action={
+              eligibleProjects.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setShowSubmitModal(true)}
+                  className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+                >
+                  <Sparkles size={14} strokeWidth={1.85} />
+                  <span>Submit a Completed Project</span>
+                </button>
+              ) : null
+            }
+          />
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filteredProjects.map((proj) => {
             const hasPpt = isValidHttpUrl(proj.pptUrl);
             const hasDemo = isValidHttpUrl(proj.demoUrl);
-            const isMyProject =
-              currentUserId && proj.teamLeader && String(proj.teamLeader.id) === String(currentUserId);
+            const memberCount =
+              Number(proj.memberCount) ||
+              (Array.isArray(proj.members) ? proj.members.length : 0);
 
             return (
               <div
                 key={proj.id}
-                className="group relative flex flex-col justify-between rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-2xs transition hover:-translate-y-0.5 hover:border-[#15803D]/55 dark:hover:border-[#A3E635]/55"
+                className="group relative flex flex-col justify-between rounded-2xl border border-black/12 bg-white p-5 shadow-2xs transition hover:border-black/35 dark:border-white/12 dark:bg-[#08080A] dark:hover:border-white/35"
               >
                 <div>
-                  {/* Top Row: Rank, Time Ago & Star Voting */}
-                  <div className="flex items-start justify-between gap-3">
+                  {/* Top Row: Rank, Time Ago & Gold Star Voting */}
+                  <div className="flex items-start justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       {getRankBadge(proj.rank)}
-                      {/* Dynamic Time Ago */}
                       <span
-                        className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-2.5 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]"
-                        title={`Published ${formatDate(proj.submittedAt || proj.createdAt)}`}
+                        className="inline-flex items-center gap-1 rounded-md border border-black/10 bg-neutral-50 px-2 py-0.5 text-[10px] font-semibold text-neutral-600 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-400"
+                        title={`Published ${formatDate(
+                          proj.submittedAt || proj.createdAt,
+                        )}`}
                       >
-                        <Clock size={10} className="text-[var(--text-muted)]" />
-                        <span>{formatRelativeTime(proj.submittedAt || proj.createdAt)}</span>
+                        <Clock size={10} strokeWidth={1.85} />
+                        <span>
+                          {formatRelativeTime(
+                            proj.submittedAt || proj.createdAt,
+                          )}
+                        </span>
                       </span>
                     </div>
 
-                    {/* Star Actions: Give Star + View Categorized Breakdown */}
+                    {/* Gold Star Actions */}
                     <div className="flex shrink-0 items-center gap-1.5">
                       <button
                         type="button"
                         disabled={votingId === proj.id}
                         onClick={() => handleToggleStar(proj.id)}
-                        title={proj.isStarred ? "Click to remove your star" : "Click to give 1 star"}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition cursor-pointer ${
+                        title={
                           proj.isStarred
-                            ? "border-amber-400/60 bg-amber-400/15 text-amber-800 dark:text-amber-200 shadow-xs"
-                            : "border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] text-[var(--text-secondary)] hover:border-amber-400/50 hover:text-amber-600"
+                            ? "Click to remove your star"
+                            : "Click to give 1 star"
+                        }
+                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold tabular-nums transition ${
+                          proj.isStarred
+                            ? "border-amber-500/60 bg-amber-500/15 text-amber-800 dark:border-amber-400/50 dark:bg-amber-400/15 dark:text-amber-300"
+                            : "border-black/12 bg-neutral-50 text-neutral-800 hover:border-amber-500/50 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-200 dark:hover:border-amber-400/50"
                         }`}
                       >
                         <Star
                           size={13}
-                          className={`transition-colors ${
-                            proj.isStarred ? "fill-amber-400 text-amber-500" : "text-[var(--text-muted)]"
-                          }`}
+                          strokeWidth={1.9}
+                          className={
+                            proj.isStarred
+                              ? "fill-amber-400 text-amber-500"
+                              : "text-amber-500 dark:text-amber-400"
+                          }
                         />
-                        <span>{proj.starCount}</span>
+                        <span>{proj.starCount ?? 0}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => openStarsBreakdown(proj)}
                         title="Inspect who gave a star (Categorized by Directors, Mentors, and Students)"
-                        className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-2 py-1 text-[11px] font-semibold text-[var(--text-secondary)] transition hover:border-[#15803D]/50 dark:hover:border-[#A3E635]/50 hover:text-[var(--text-primary)] cursor-pointer"
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-xl border border-black/12 bg-neutral-50 px-2 py-1 text-[11px] font-semibold text-neutral-700 transition hover:border-black/30 hover:text-neutral-950 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-white/30 dark:hover:text-white"
                       >
-                        <Users size={11} className="text-[var(--text-muted)]" />
+                        <Users size={11} strokeWidth={1.85} />
                         <span>Stars</span>
                       </button>
                     </div>
                   </div>
 
                   {/* Title & Description */}
-                  <h2 className="mt-3.5 line-clamp-1 text-base font-extrabold text-[var(--text-primary)]">
-                    {proj.title}
+                  <h2 className="mt-3.5 line-clamp-1 text-base font-extrabold text-neutral-950 dark:text-white">
+                    {proj.title || proj.name || "Untitled Project"}
                   </h2>
 
-                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-600 dark:text-neutral-400">
                     {proj.description || "No project description provided."}
                   </p>
 
                   {/* Team Leader & Squad details */}
-                  <div className="mt-4 space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3.5 text-xs">
+                  <div className="mt-4 space-y-2 rounded-xl border border-black/10 bg-neutral-50 p-3.5 text-xs dark:border-white/10 dark:bg-[#101014]">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1.5 text-[var(--text-muted)]">
-                        <Crown size={13} className="text-amber-500" /> Leader
+                      <span className="inline-flex items-center gap-1.5 text-neutral-500 dark:text-neutral-400">
+                        <Crown
+                          size={13}
+                          strokeWidth={1.85}
+                          className="text-amber-500 dark:text-amber-400"
+                        />
+                        <span>Leader</span>
                       </span>
                       <div className="min-w-0 text-right">
-                        <p className="truncate font-bold text-[var(--text-primary)]">
+                        <p className="truncate font-bold text-neutral-950 dark:text-white">
                           {proj.teamLeader?.name || "Unassigned"}
                         </p>
                         {proj.teamLeader?.roll_no && (
-                          <p className="font-mono text-[10px] text-[var(--text-muted)]">
+                          <p className="font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
                             {proj.teamLeader.roll_no}
                           </p>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-1.5">
-                      <span className="inline-flex items-center gap-1.5 text-[var(--text-muted)]">
-                        <Users size={13} /> Squad
+                    <div className="flex items-center justify-between gap-2 border-t border-black/10 pt-1.5 dark:border-white/10">
+                      <span className="inline-flex items-center gap-1.5 text-neutral-500 dark:text-neutral-400">
+                        <Users size={13} strokeWidth={1.85} />
+                        <span>Squad</span>
                       </span>
-                      <span className="font-bold text-[var(--text-primary)]">
-                        {proj.memberCount} student(s)
+                      <span className="font-bold tabular-nums text-neutral-950 dark:text-white">
+                        {memberCount} student(s)
                       </span>
                     </div>
 
                     {proj.mentor && (
-                      <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-1.5">
-                        <span className="inline-flex items-center gap-1.5 text-[var(--text-muted)]">
-                          <GraduationCap size={13} className="text-[var(--accent-text)]" /> Mentor
+                      <div className="flex items-center justify-between gap-2 border-t border-black/10 pt-1.5 dark:border-white/10">
+                        <span className="inline-flex items-center gap-1.5 text-neutral-500 dark:text-neutral-400">
+                          <GraduationCap size={13} strokeWidth={1.85} />
+                          <span>Mentor</span>
                         </span>
-                        <span className="truncate font-bold text-[var(--text-primary)]">
+                        <span className="truncate font-bold text-neutral-950 dark:text-white">
                           {proj.mentor.name}
                         </span>
                       </div>
@@ -566,7 +638,7 @@ export default function Leaderboard() {
                 </div>
 
                 {/* Bottom Row: Deliverable Links + Public Inspect Button */}
-                <div className="mt-4 border-t border-[var(--border-subtle)] pt-3.5">
+                <div className="mt-4 border-t border-black/10 pt-3.5 dark:border-white/10">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       {hasPpt ? (
@@ -575,13 +647,15 @@ export default function Leaderboard() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title="Open Presentation PPT"
-                          className="inline-flex items-center gap-1 rounded-xl border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[11px] font-bold text-sky-700 dark:text-sky-300 transition hover:bg-sky-500/20"
+                          className="inline-flex items-center gap-1 rounded-xl border border-black/15 bg-neutral-50 px-2.5 py-1 text-[11px] font-bold text-neutral-900 transition hover:border-black/35 dark:border-white/15 dark:bg-[#101014] dark:text-white dark:hover:border-white/35"
                         >
-                          <Presentation size={13} /> PPT
+                          <Presentation size={13} strokeWidth={1.85} />
+                          <span>PPT</span>
                         </a>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded-xl bg-[var(--bg-surface-subtle)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] opacity-60">
-                          <Presentation size={13} /> PPT —
+                        <span className="inline-flex items-center gap-1 rounded-xl border border-black/8 bg-neutral-50 px-2.5 py-1 text-[11px] font-medium text-neutral-400 dark:border-white/8 dark:bg-[#101014] dark:text-neutral-500">
+                          <Presentation size={13} strokeWidth={1.85} />
+                          <span>PPT —</span>
                         </span>
                       )}
 
@@ -591,13 +665,15 @@ export default function Leaderboard() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title="Open Live Demo"
-                          className="inline-flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 transition hover:bg-emerald-500/20"
+                          className="inline-flex items-center gap-1 rounded-xl border border-black/15 bg-neutral-50 px-2.5 py-1 text-[11px] font-bold text-neutral-900 transition hover:border-black/35 dark:border-white/15 dark:bg-[#101014] dark:text-white dark:hover:border-white/35"
                         >
-                          <Video size={13} /> Live Demo
+                          <Video size={13} strokeWidth={1.85} />
+                          <span>Live Demo</span>
                         </a>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded-xl bg-[var(--bg-surface-subtle)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] opacity-60">
-                          <Video size={13} /> Demo —
+                        <span className="inline-flex items-center gap-1 rounded-xl border border-black/8 bg-neutral-50 px-2.5 py-1 text-[11px] font-medium text-neutral-400 dark:border-white/8 dark:bg-[#101014] dark:text-neutral-500">
+                          <Video size={13} strokeWidth={1.85} />
+                          <span>Demo —</span>
                         </span>
                       )}
                     </div>
@@ -605,10 +681,10 @@ export default function Leaderboard() {
                     <button
                       type="button"
                       onClick={() => setSelectedProject(proj)}
-                      className="inline-flex items-center gap-1 text-xs font-bold text-[var(--accent-text)] transition hover:underline cursor-pointer"
+                      className="inline-flex cursor-pointer items-center gap-1 text-xs font-bold text-neutral-900 transition hover:underline dark:text-white"
                     >
                       <span>Inspect Project</span>
-                      <ExternalLink size={13} />
+                      <ExternalLink size={13} strokeWidth={1.85} />
                     </button>
                   </div>
                 </div>
@@ -618,7 +694,7 @@ export default function Leaderboard() {
         </div>
       )}
 
-      {/* PUBLIC PROJECT DETAIL MODAL (Exposes ONLY core details, PPT & Demo link, Zero internal chats) */}
+      {/* REFINED INSPECT PROJECT PANEL / MODAL */}
       <Modal
         open={Boolean(selectedProject)}
         onClose={() => setSelectedProject(null)}
@@ -627,10 +703,15 @@ export default function Leaderboard() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-black">{selectedProject.title}</span>
               {getRankBadge(selectedProject.rank)}
-              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-2.5 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
-                <Clock size={10} className="text-[var(--text-muted)]" />
-                <span>Published {formatRelativeTime(selectedProject.submittedAt || selectedProject.createdAt)}</span>
-              </span>
+              <NeutralBadge>
+                <Clock size={10} strokeWidth={1.85} />
+                <span>
+                  Published{" "}
+                  {formatRelativeTime(
+                    selectedProject.submittedAt || selectedProject.createdAt,
+                  )}
+                </span>
+              </NeutralBadge>
             </div>
           ) : (
             "Project Showcase"
@@ -640,32 +721,37 @@ export default function Leaderboard() {
         size="max-w-2xl"
       >
         {selectedProject && (
-          <div className="space-y-5">
+          <div className="space-y-5 text-neutral-950 dark:text-white">
             {/* Project Summary */}
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
+            <div className="rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]">
+              <h3 className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                 About the Project
               </h3>
-              <p className="mt-1.5 text-xs leading-relaxed text-[var(--text-primary)] sm:text-sm">
-                {selectedProject.description || "No project description provided."}
+              <p className="mt-1.5 text-xs leading-relaxed text-neutral-700 dark:text-neutral-300 sm:text-sm">
+                {selectedProject.description ||
+                  "No project description provided."}
               </p>
             </div>
 
             {/* Core Deliverable Links (PPT + Demo) */}
             <div>
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
+              <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                 Showcase Deliverables
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="flex flex-col justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4">
+                <div className="flex flex-col justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/15 text-sky-600 dark:text-sky-300">
-                      <Presentation size={20} />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
+                      <Presentation size={19} strokeWidth={1.85} />
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-[var(--text-primary)]">Presentation (PPT)</p>
-                      <p className="text-[11px] text-[var(--text-muted)]">
-                        {isValidHttpUrl(selectedProject.pptUrl) ? "Slide deck ready" : "Not submitted"}
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                        Presentation (PPT)
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {isValidHttpUrl(selectedProject.pptUrl)
+                          ? "Slide deck ready"
+                          : "Not submitted"}
                       </p>
                     </div>
                   </div>
@@ -674,30 +760,36 @@ export default function Leaderboard() {
                       href={selectedProject.pptUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center gap-1.5 rounded-full bg-sky-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-sky-700"
+                      className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
                     >
-                      <Presentation size={13} /> Open Presentation <ExternalLink size={12} />
+                      <Presentation size={13} strokeWidth={1.85} />
+                      <span>Open Presentation</span>
+                      <ExternalLink size={12} strokeWidth={1.85} />
                     </a>
                   ) : (
                     <button
                       type="button"
                       disabled
-                      className="rounded-full bg-[var(--bg-surface-subtle)] px-4 py-2 text-xs font-bold text-[var(--text-muted)] opacity-50"
+                      className="cursor-not-allowed rounded-xl border border-black/10 bg-white px-4 py-2 text-xs font-bold text-neutral-400 dark:border-white/10 dark:bg-[#08080A] dark:text-neutral-500"
                     >
                       No Presentation Link
                     </button>
                   )}
                 </div>
 
-                <div className="flex flex-col justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4">
+                <div className="flex flex-col justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-300">
-                      <Video size={20} />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
+                      <Video size={19} strokeWidth={1.85} />
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-[var(--text-primary)]">Live Demo Link</p>
-                      <p className="text-[11px] text-[var(--text-muted)]">
-                        {isValidHttpUrl(selectedProject.demoUrl) ? "Demo link ready" : "Not submitted"}
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                        Live Demo Link
+                      </p>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {isValidHttpUrl(selectedProject.demoUrl)
+                          ? "Demo link ready"
+                          : "Not submitted"}
                       </p>
                     </div>
                   </div>
@@ -706,15 +798,17 @@ export default function Leaderboard() {
                       href={selectedProject.demoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center gap-1.5 rounded-full bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-700"
+                      className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
                     >
-                      <Video size={13} /> View Live Demo <ExternalLink size={12} />
+                      <Video size={13} strokeWidth={1.85} />
+                      <span>View Live Demo</span>
+                      <ExternalLink size={12} strokeWidth={1.85} />
                     </a>
                   ) : (
                     <button
                       type="button"
                       disabled
-                      className="rounded-full bg-[var(--bg-surface-subtle)] px-4 py-2 text-xs font-bold text-[var(--text-muted)] opacity-50"
+                      className="cursor-not-allowed rounded-xl border border-black/10 bg-white px-4 py-2 text-xs font-bold text-neutral-400 dark:border-white/10 dark:bg-[#08080A] dark:text-neutral-500"
                     >
                       No Live Demo Link
                     </button>
@@ -723,67 +817,95 @@ export default function Leaderboard() {
               </div>
             </div>
 
-            {/* Team Roster (Leader + Members) */}
+            {/* Team Roster */}
             <div>
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
-                Team Squad ({selectedProject.memberCount})
+              <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                Team Squad (
+                {Number(selectedProject.memberCount) ||
+                  (Array.isArray(selectedProject.members)
+                    ? selectedProject.members.length
+                    : 0)}
+                )
               </h3>
-              <div className="space-y-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3">
+              <div className="space-y-2 rounded-xl border border-black/10 bg-neutral-50 p-3 dark:border-white/10 dark:bg-[#101014]">
                 {selectedProject.teamLeader && (
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-500 text-[11px] font-black text-black">
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-black/15 bg-white p-2.5 dark:border-white/15 dark:bg-[#08080A]">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-neutral-950 text-xs font-black text-white dark:bg-white dark:text-black">
                         {getInitials(selectedProject.teamLeader.name)}
                       </div>
-                      <div>
-                        <p className="text-xs font-bold text-[var(--text-primary)]">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
                           {selectedProject.teamLeader.name}
                         </p>
-                        <p className="text-[11px] text-[var(--text-muted)]">
+                        <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
                           {selectedProject.teamLeader.email}
-                          {selectedProject.teamLeader.roll_no ? ` · Roll: ${selectedProject.teamLeader.roll_no}` : ""}
+                          {selectedProject.teamLeader.roll_no
+                            ? ` · Roll: ${selectedProject.teamLeader.roll_no}`
+                            : ""}
                         </p>
                       </div>
                     </div>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:text-amber-200">
-                      <Crown size={11} /> Team Leader
-                    </span>
+                    <NeutralBadge>
+                      <Crown
+                        size={11}
+                        strokeWidth={1.9}
+                        className="text-amber-500 dark:text-amber-400"
+                      />
+                      <span>Team Leader</span>
+                    </NeutralBadge>
                   </div>
                 )}
 
                 {(selectedProject.members || []).map((m) => (
                   <div
                     key={m.id}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2.5"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-white p-2.5 dark:border-white/10 dark:bg-[#08080A]"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#141A17] text-[10px] font-bold text-[#BEF264] dark:bg-[#A3E635] dark:text-[#090D0B]">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-black/12 bg-neutral-100 text-[11px] font-bold text-neutral-900 dark:border-white/12 dark:bg-[#101014] dark:text-white">
                         {getInitials(m.name)}
                       </div>
-                      <div>
-                        <p className="text-xs font-bold text-[var(--text-primary)]">{m.name}</p>
-                        <p className="text-[11px] text-[var(--text-muted)]">
-                          {m.email} {m.roll_no ? `· Roll: ${m.roll_no}` : ""}
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                          {m.name}
+                        </p>
+                        <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+                          {m.email}{" "}
+                          {m.roll_no ? `· Roll: ${m.roll_no}` : ""}
                         </p>
                       </div>
                     </div>
-                    <span className="rounded-full bg-[var(--bg-surface-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--text-secondary)]">
-                      Member
-                    </span>
+                    <NeutralBadge>Member</NeutralBadge>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Voting & Stars Inspection CTA */}
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+            {/* Voting & Stars Inspection Footer */}
+            <div className="flex flex-col justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014] sm:flex-row sm:items-center">
               <div>
-                <p className="text-xs font-bold text-[var(--text-primary)]">
-                  Total Stars: <strong className="text-amber-500">{selectedProject.starCount}</strong>
+                <p className="inline-flex items-center gap-1.5 text-xs font-bold tabular-nums text-neutral-950 dark:text-white">
+                  <Star
+                    size={13}
+                    strokeWidth={1.9}
+                    className="fill-amber-400 text-amber-500"
+                  />
+                  <span>
+                    Total Stars:{" "}
+                    <strong className="text-amber-700 dark:text-amber-300">
+                      {selectedProject.starCount ?? 0}
+                    </strong>
+                  </span>
                 </p>
-                <p className="text-[11px] text-[var(--text-muted)]">
-                  {selectedProject.isStarred ? "You starred this project" : "1 vote per user"} · Published{" "}
-                  {formatRelativeTime(selectedProject.submittedAt || selectedProject.createdAt)}
+                <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  {selectedProject.isStarred
+                    ? "You starred this project"
+                    : "1 vote per user"}{" "}
+                  · Published{" "}
+                  {formatRelativeTime(
+                    selectedProject.submittedAt || selectedProject.createdAt,
+                  )}
                 </p>
               </div>
 
@@ -791,10 +913,10 @@ export default function Leaderboard() {
                 <button
                   type="button"
                   onClick={() => openStarsBreakdown(selectedProject)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-4 py-2 text-xs font-bold text-[var(--text-primary)] transition hover:border-[#15803D]/50 hover:bg-[var(--bg-surface-subtle)] cursor-pointer"
+                  className={`${portalSecondaryBtnClass} cursor-pointer rounded-xl dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white`}
                   title="View categorized star breakdown by role"
                 >
-                  <Users size={13} />
+                  <Users size={13} strokeWidth={1.85} />
                   <span>View Star Breakdown</span>
                 </button>
 
@@ -802,17 +924,26 @@ export default function Leaderboard() {
                   type="button"
                   onClick={() => handleToggleStar(selectedProject.id)}
                   disabled={votingId === selectedProject.id}
-                  className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-xs font-bold transition cursor-pointer ${
+                  className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition ${
                     selectedProject.isStarred
-                      ? "border border-amber-400 bg-amber-400/20 text-amber-800 dark:text-amber-200"
-                      : portalPrimaryBtnClass
+                      ? "border-amber-500/60 bg-amber-500/15 text-amber-800 dark:border-amber-400/50 dark:bg-amber-400/15 dark:text-amber-300"
+                      : `${portalPrimaryBtnClass} dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`
                   }`}
                 >
                   <Star
-                    size={15}
-                    className={selectedProject.isStarred ? "fill-amber-400 text-amber-500" : ""}
+                    size={14}
+                    strokeWidth={1.9}
+                    className={
+                      selectedProject.isStarred
+                        ? "fill-amber-400 text-amber-500"
+                        : "text-amber-400 dark:text-amber-500"
+                    }
                   />
-                  <span>{selectedProject.isStarred ? "Starred (Click to Remove)" : "Give Star"}</span>
+                  <span>
+                    {selectedProject.isStarred
+                      ? "Starred (Click to Remove)"
+                      : "Give Star"}
+                  </span>
                 </button>
               </div>
             </div>
@@ -829,20 +960,23 @@ export default function Leaderboard() {
         size="max-w-xl"
       >
         <div className="space-y-4">
-          <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
-            Publishing your project showcases your live demo and presentation across the institute. Both PPT and Live Demo links must remain active to stay on the Leaderboard.
+          <p className="text-xs leading-relaxed text-neutral-600 dark:text-neutral-400">
+            Publishing your project showcases your live demo and presentation
+            across the institute. Both PPT and Live Demo links must remain
+            active to stay on the Leaderboard.
           </p>
 
           {eligibleProjects.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-[var(--border-strong)] p-6 text-center text-xs text-[var(--text-muted)]">
-              You do not have any completed projects yet. Complete all tasks or mark your project status as
-              "Completed" to submit!
+            <div className="rounded-xl border border-dashed border-black/15 bg-neutral-50 p-6 text-center text-xs text-neutral-500 dark:border-white/15 dark:bg-[#101014] dark:text-neutral-400">
+              You do not have any completed projects yet. Complete all tasks or
+              mark your project status as &ldquo;Completed&rdquo; to submit!
             </div>
           ) : (
             <div className="space-y-3">
               {eligibleProjects.map((p) => {
                 const isDeliverablesReady = Boolean(
-                  p.hasValidDeliverables ?? (isValidHttpUrl(p.pptUrl) && isValidHttpUrl(p.demoUrl))
+                  p.hasValidDeliverables ??
+                    (isValidHttpUrl(p.pptUrl) && isValidHttpUrl(p.demoUrl)),
                 );
                 const isPublished = Boolean(p.isOnLeaderboard);
                 const busy = submittingId === p.id;
@@ -850,33 +984,37 @@ export default function Leaderboard() {
                 return (
                   <div
                     key={p.id}
-                    className="flex flex-col justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4 sm:flex-row sm:items-center"
+                    className="flex flex-col justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014] sm:flex-row sm:items-center"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-extrabold text-[var(--text-primary)]">
+                        <p className="truncate text-sm font-extrabold text-neutral-950 dark:text-white">
                           {p.title}
                         </p>
                         {isPublished ? (
-                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
-                            On Leaderboard ({p.starCount || 0} ⭐)
-                          </span>
+                          <NeutralBadge>
+                            <Star
+                              size={10}
+                              strokeWidth={1.9}
+                              className="fill-amber-400 text-amber-500"
+                            />
+                            <span>
+                              On Leaderboard ({p.starCount || 0})
+                            </span>
+                          </NeutralBadge>
                         ) : isDeliverablesReady ? (
-                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:text-amber-300">
-                            Eligible to Submit
-                          </span>
+                          <NeutralBadge>Eligible to Submit</NeutralBadge>
                         ) : (
-                          <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:text-red-300">
-                            Missing PPT / Demo Link
-                          </span>
+                          <NeutralBadge>Missing PPT / Demo Link</NeutralBadge>
                         )}
                       </div>
-                      <p className="mt-1 line-clamp-1 text-xs text-[var(--text-muted)]">
+                      <p className="mt-1 line-clamp-1 text-xs text-neutral-500 dark:text-neutral-400">
                         {p.description || "100% Completed Project"}
                       </p>
                       {!isDeliverablesReady && (
-                        <p className="mt-1 text-[11px] font-semibold text-red-600 dark:text-red-400">
-                          Requires both valid PPT &amp; Live Demo links to submit.
+                        <p className="mt-1 text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
+                          Requires both valid PPT &amp; Live Demo links to
+                          submit.
                         </p>
                       )}
                     </div>
@@ -887,24 +1025,27 @@ export default function Leaderboard() {
                           type="button"
                           disabled={busy}
                           onClick={() => handleWithdrawProject(p.id)}
-                          className={portalSecondaryBtnClass}
+                          className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white`}
                         >
-                          {busy ? "Working..." : "Withdraw"}
+                          <span>{busy ? "Working..." : "Withdraw"}</span>
                         </button>
                       ) : isDeliverablesReady ? (
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => handleSubmitProject(p.id)}
-                          className={portalPrimaryBtnClass}
+                          className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
                         >
-                          <Sparkles size={14} /> {busy ? "Publishing..." : "Publish to Leaderboard"}
+                          <Sparkles size={14} strokeWidth={1.85} />
+                          <span>
+                            {busy ? "Publishing..." : "Publish to Leaderboard"}
+                          </span>
                         </button>
                       ) : (
                         <button
                           type="button"
                           disabled
-                          className="rounded-full bg-[var(--bg-surface-subtle)] px-3 py-1.5 text-xs font-bold text-[var(--text-muted)] opacity-60 cursor-not-allowed"
+                          className="cursor-not-allowed rounded-xl border border-black/10 bg-white px-3 py-1.5 text-xs font-bold text-neutral-400 dark:border-white/10 dark:bg-[#08080A] dark:text-neutral-500"
                           title="Upload PPT and Live Demo in Projects to qualify"
                         >
                           Links Required
@@ -921,7 +1062,7 @@ export default function Leaderboard() {
             <button
               type="button"
               onClick={() => setShowSubmitModal(false)}
-              className={portalSecondaryBtnClass}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
             >
               Close
             </button>
@@ -929,18 +1070,29 @@ export default function Leaderboard() {
         </div>
       </Modal>
 
-      {/* CATEGORIZED STAR VIEW PANEL (Directors Top, Mentors Middle, Students Below, Tailored Perspective) */}
+      {/* CATEGORIZED STAR VIEW PANEL */}
       <Modal
         open={Boolean(inspectingStarsProject)}
         onClose={closeStarsBreakdown}
         title={
           inspectingStarsProject ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-black">Star Endorsements: {inspectingStarsProject.title}</span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2.5 py-0.5 text-xs font-bold text-amber-800 dark:text-amber-200">
-                <Star size={12} className="fill-amber-400 text-amber-500" />
-                {starsBreakdown?.totalStars ?? inspectingStarsProject.starCount} Total
+              <span className="font-black">
+                Star Endorsements: {inspectingStarsProject.title}
               </span>
+              <NeutralBadge className="border-amber-500/40 bg-amber-500/12 text-amber-800 dark:border-amber-400/35 dark:bg-amber-400/12 dark:text-amber-300">
+                <Star
+                  size={11}
+                  strokeWidth={1.9}
+                  className="fill-amber-400 text-amber-500"
+                />
+                <span>
+                  {starsBreakdown?.totalStars ??
+                    inspectingStarsProject.starCount ??
+                    0}{" "}
+                  Total
+                </span>
+              </NeutralBadge>
             </div>
           ) : (
             "Star Endorsements Breakdown"
@@ -952,58 +1104,81 @@ export default function Leaderboard() {
         {starsLoading && !starsBreakdown ? (
           <LoadingState label="Loading star endorsements..." />
         ) : (
-          <div className="space-y-4">
-            {starsError && <ErrorAlert message={starsError} onDismiss={() => setStarsError("")} />}
+          <div className="space-y-4 text-neutral-950 dark:text-white">
+            {starsError && (
+              <ErrorAlert
+                message={starsError}
+                onDismiss={() => setStarsError("")}
+              />
+            )}
 
             {(() => {
               const allVoters = [
-                ...(starsBreakdown?.categorized?.directors || []).map((v) => ({ ...v, tier: "director" })),
-                ...(starsBreakdown?.categorized?.admins || []).map((v) => ({ ...v, tier: "admin" })),
-                ...(starsBreakdown?.categorized?.mentors || []).map((v) => ({ ...v, tier: "mentor" })),
-                ...(starsBreakdown?.categorized?.students || []).map((v) => ({ ...v, tier: "student" })),
+                ...(starsBreakdown?.categorized?.directors || []).map((v) => ({
+                  ...v,
+                  tier: "director",
+                })),
+                ...(starsBreakdown?.categorized?.admins || []).map((v) => ({
+                  ...v,
+                  tier: "admin",
+                })),
+                ...(starsBreakdown?.categorized?.mentors || []).map((v) => ({
+                  ...v,
+                  tier: "mentor",
+                })),
+                ...(starsBreakdown?.categorized?.students || []).map((v) => ({
+                  ...v,
+                  tier: "student",
+                })),
               ];
 
               return (
                 <>
-                  {/* Perspective Status Bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-4 py-2.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-black/10 bg-neutral-50 px-4 py-2.5 text-xs dark:border-white/10 dark:bg-[#101014]">
                     <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-[var(--text-primary)]">
-                        {allVoters.length} {allVoters.length === 1 ? "Star Endorsement" : "Star Endorsements"}
+                      <span className="font-extrabold tabular-nums text-neutral-950 dark:text-white">
+                        {allVoters.length}{" "}
+                        {allVoters.length === 1
+                          ? "Star Endorsement"
+                          : "Star Endorsements"}
                       </span>
-                      <span className="text-[var(--text-muted)]">·</span>
-                      <span className="text-[var(--text-secondary)] font-medium">
+                      <span className="text-neutral-400">·</span>
+                      <span className="font-medium text-neutral-600 dark:text-neutral-400">
                         Viewing as {getRoleDisplayLabel(user)}
                       </span>
                     </div>
 
                     {starsBreakdown?.currentUserStarred ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/15 px-2.5 py-0.5 text-[11px] font-bold text-amber-800 dark:text-amber-200">
-                        <Star size={11} className="fill-amber-400 text-amber-500" /> Starred by You
-                      </span>
+                      <NeutralBadge className="border-amber-500/40 bg-amber-500/12 text-amber-800 dark:border-amber-400/35 dark:bg-amber-400/12 dark:text-amber-300">
+                        <Star
+                          size={11}
+                          strokeWidth={1.9}
+                          className="fill-amber-400 text-amber-500"
+                        />
+                        <span>Starred by You</span>
+                      </NeutralBadge>
                     ) : (
-                      <span className="text-[11px] font-semibold text-[var(--text-muted)]">
+                      <span className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
                         1 vote allowed per user
                       </span>
                     )}
                   </div>
 
-                  {/* Empty State */}
                   {allVoters.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-8 text-center">
-                      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
-                        <Star size={24} />
+                    <div className="rounded-xl border border-dashed border-black/15 bg-neutral-50 p-8 text-center dark:border-white/15 dark:bg-[#101014]">
+                      <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl border border-black/12 bg-white text-amber-500 dark:border-white/12 dark:bg-[#08080A] dark:text-amber-400">
+                        <Star size={20} strokeWidth={1.85} />
                       </div>
-                      <h4 className="mt-3 text-sm font-extrabold text-[var(--text-primary)]">
+                      <h4 className="mt-3 text-sm font-extrabold text-neutral-950 dark:text-white">
                         No Star Endorsements Yet
                       </h4>
-                      <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-[var(--text-muted)]">
-                        This project has not received any stars yet. Be the first to give it an endorsement!
+                      <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">
+                        This project has not received any stars yet. Be the first
+                        to give it an endorsement!
                       </p>
                     </div>
                   ) : (
-                    /* Unified Vertical List (No Heavy Boxes / Columns) */
-                    <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] divide-y divide-[var(--border-subtle)]">
+                    <div className="divide-y divide-black/10 overflow-hidden rounded-xl border border-black/12 bg-white dark:divide-white/10 dark:border-white/12 dark:bg-[#08080A]">
                       {allVoters.map((v) => {
                         const isDirector = v.tier === "director";
                         const isAdmin = v.tier === "admin";
@@ -1013,64 +1188,40 @@ export default function Leaderboard() {
                         return (
                           <div
                             key={v.starId || v.id}
-                            className={`flex items-center justify-between gap-3 p-3.5 transition hover:bg-[var(--bg-surface-elevated)] ${
-                              isDirector
-                                ? "border-l-4 border-amber-500 bg-amber-500/[0.04] dark:bg-amber-400/[0.03]"
-                                : isAdmin
-                                ? "border-l-4 border-purple-500 bg-purple-500/[0.04]"
-                                : isMentor
-                                ? "border-l-4 border-emerald-500 bg-emerald-500/[0.03]"
-                                : "pl-4"
-                            } ${v.isCurrentUser ? "ring-1 ring-inset ring-amber-400/50" : ""}`}
+                            className={`flex items-center justify-between gap-3 p-3.5 transition hover:bg-neutral-50 dark:hover:bg-[#101014] ${
+                              isDirector || isAdmin
+                                ? "border-l-2 border-neutral-950 dark:border-white"
+                                : ""
+                            }`}
                           >
-                            <div className="flex items-center gap-3 min-w-0">
-                              {/* Avatar with role-based sizing & colors */}
+                            <div className="flex min-w-0 items-center gap-3">
                               <div
-                                className={`flex shrink-0 items-center justify-center rounded-full font-black ${
-                                  isDirector
-                                    ? "h-11 w-11 bg-gradient-to-tr from-purple-700 via-amber-600 to-amber-400 text-white text-sm shadow-xs ring-2 ring-amber-400/40"
-                                    : isAdmin
-                                    ? "h-10 w-10 bg-purple-600 text-white text-sm shadow-xs ring-2 ring-purple-400/30"
-                                    : isMentor
-                                    ? "h-9 w-9 bg-emerald-600 text-white text-xs font-bold shadow-2xs"
-                                    : "h-8 w-8 bg-[#141A17] text-[#BEF264] dark:bg-[#A3E635] dark:text-[#090D0B] text-[11px] font-bold"
+                                className={`flex shrink-0 items-center justify-center rounded-xl border font-extrabold ${
+                                  isDirector || isAdmin
+                                    ? "h-10 w-10 border-black/20 bg-neutral-950 text-xs text-white dark:border-white/20 dark:bg-white dark:text-black"
+                                    : "h-9 w-9 border-black/12 bg-neutral-100 text-xs text-neutral-900 dark:border-white/12 dark:bg-[#101014] dark:text-white"
                                 }`}
                               >
                                 {getInitials(v.name)}
                               </div>
 
                               <div className="min-w-0">
-                                {/* Name with Dynamic Sizing & Colors */}
                                 <div className="flex flex-wrap items-center gap-1.5">
-                                  {isDirector ? (
-                                    <p className="truncate text-base sm:text-lg font-black tracking-tight text-amber-600 dark:text-amber-400">
-                                      {v.name}
-                                    </p>
-                                  ) : isAdmin ? (
-                                    <p className="truncate text-base sm:text-lg font-black tracking-tight text-purple-700 dark:text-purple-300">
-                                      {v.name}
-                                    </p>
-                                  ) : isMentor ? (
-                                    <p className="truncate text-sm sm:text-base font-bold text-emerald-800 dark:text-emerald-300">
-                                      {v.name}
-                                    </p>
-                                  ) : (
-                                    <p className="truncate text-xs sm:text-sm font-semibold text-[var(--text-primary)]">
-                                      {v.name}
-                                    </p>
-                                  )}
-
+                                  <p className="truncate text-xs font-bold text-neutral-950 dark:text-white sm:text-sm">
+                                    {v.name}
+                                  </p>
                                   {v.isCurrentUser && (
-                                    <span className="rounded-full bg-emerald-600 px-1.5 py-0.2 text-[9px] font-bold text-white shadow-2xs">
-                                      You
-                                    </span>
+                                    <NeutralBadge>
+                                      <CheckCircle2 size={10} strokeWidth={2} />
+                                      <span>You</span>
+                                    </NeutralBadge>
                                   )}
                                 </div>
 
-                                <p className="truncate text-[11px] text-[var(--text-muted)]">
+                                <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
                                   {v.email}
                                   {isStudent && v.rollNo ? (
-                                    <span className="ml-1.5 font-mono font-semibold text-[var(--text-secondary)]">
+                                    <span className="ml-1.5 font-mono font-semibold text-neutral-700 dark:text-neutral-300">
                                       · Roll: {v.rollNo}
                                     </span>
                                   ) : null}
@@ -1078,30 +1229,33 @@ export default function Leaderboard() {
                               </div>
                             </div>
 
-                            {/* Role Badge and Time Ago */}
-                            <div className="text-right shrink-0">
+                            <div className="shrink-0 text-right">
                               {isDirector ? (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2.5 py-0.5 text-[11px] font-black text-amber-800 dark:text-amber-300">
-                                  <Crown size={12} className="text-amber-500" />
-                                  Director
-                                </span>
+                                <NeutralBadge>
+                                  <Crown
+                                    size={11}
+                                    strokeWidth={1.9}
+                                    className="text-amber-500 dark:text-amber-400"
+                                  />
+                                  <span>Director</span>
+                                </NeutralBadge>
                               ) : isAdmin ? (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-purple-400/50 bg-purple-500/15 px-2.5 py-0.5 text-[11px] font-bold text-purple-800 dark:text-purple-300">
-                                  <ShieldCheck size={12} />
-                                  Admin
-                                </span>
+                                <NeutralBadge>
+                                  <ShieldCheck size={11} strokeWidth={1.85} />
+                                  <span>Admin</span>
+                                </NeutralBadge>
                               ) : isMentor ? (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
-                                  <GraduationCap size={11} />
-                                  Faculty Mentor
-                                </span>
+                                <NeutralBadge>
+                                  <GraduationCap size={11} strokeWidth={1.85} />
+                                  <span>Faculty Mentor</span>
+                                </NeutralBadge>
                               ) : (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--bg-surface-subtle)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
-                                  <Users size={10} />
-                                  Student
-                                </span>
+                                <NeutralBadge>
+                                  <Users size={10} strokeWidth={1.85} />
+                                  <span>Student</span>
+                                </NeutralBadge>
                               )}
-                              <p className="mt-0.5 text-[10px] text-[var(--text-muted)]">
+                              <p className="mt-0.5 text-[10px] text-neutral-500 dark:text-neutral-400">
                                 {formatRelativeTime(v.starredAt)}
                               </p>
                             </div>
@@ -1114,34 +1268,38 @@ export default function Leaderboard() {
               );
             })()}
 
-            {/* Modal Bottom CTA */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-4">
+            <div className="flex flex-col justify-between gap-3 border-t border-black/10 pt-4 dark:border-white/10 sm:flex-row sm:items-center">
               <div>
-                <p className="text-xs font-bold text-[var(--text-primary)]">
+                <p className="text-xs font-bold text-neutral-950 dark:text-white">
                   {starsBreakdown?.currentUserStarred
-                    ? "⭐ You have endorsed this project"
+                    ? "You have endorsed this project"
                     : "You have not starred this project yet (1 vote per user)"}
                 </p>
-                <p className="text-[11px] text-[var(--text-muted)]">
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
                   Your star vote appears instantly in the list above.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {inspectingStarsProject && (
                   <button
                     type="button"
                     onClick={() => handleToggleStar(inspectingStarsProject.id)}
                     disabled={votingId === inspectingStarsProject.id}
-                    className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition cursor-pointer ${
+                    className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition ${
                       starsBreakdown?.currentUserStarred
-                        ? "border border-amber-400 bg-amber-400/20 text-amber-800 dark:text-amber-200"
-                        : portalPrimaryBtnClass
+                        ? "border-amber-500/60 bg-amber-500/15 text-amber-800 dark:border-amber-400/50 dark:bg-amber-400/15 dark:text-amber-300"
+                        : `${portalPrimaryBtnClass} dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`
                     }`}
                   >
                     <Star
                       size={14}
-                      className={starsBreakdown?.currentUserStarred ? "fill-amber-400 text-amber-500" : ""}
+                      strokeWidth={1.9}
+                      className={
+                        starsBreakdown?.currentUserStarred
+                          ? "fill-amber-400 text-amber-500"
+                          : "text-amber-400 dark:text-amber-500"
+                      }
                     />
                     <span>
                       {starsBreakdown?.currentUserStarred
@@ -1154,7 +1312,7 @@ export default function Leaderboard() {
                 <button
                   type="button"
                   onClick={closeStarsBreakdown}
-                  className={portalSecondaryBtnClass}
+                  className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
                 >
                   Close
                 </button>

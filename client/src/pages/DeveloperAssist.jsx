@@ -58,7 +58,8 @@ const dailyGitCommands = [
   {
     step: "Step 01 · Status Check",
     command: "git status",
-    description: "Inspect working tree: view modified, staged, and untracked files.",
+    description:
+      "Inspect working tree: view modified, staged, and untracked files.",
   },
   {
     step: "Step 02 · Stage Changes",
@@ -68,17 +69,20 @@ const dailyGitCommands = [
   {
     step: "Step 03 · Commit",
     command: 'git commit -m "message"',
-    description: "Record a descriptive snapshot of staged files into local repository history.",
+    description:
+      "Record a descriptive snapshot of staged files into local repository history.",
   },
   {
     step: "Step 04 · Sync Remote",
     command: "git pull origin main",
-    description: "Fetch and merge the latest remote commits to stay up to date before pushing.",
+    description:
+      "Fetch and merge the latest remote commits to stay up to date before pushing.",
   },
   {
     step: "Step 05 · Publish",
     command: "git push origin main",
-    description: "Upload local commits to the remote GitHub or team repository.",
+    description:
+      "Upload local commits to the remote GitHub or team repository.",
   },
 ];
 
@@ -86,22 +90,26 @@ const branchingCommands = [
   {
     label: "New Feature Branch",
     command: "git checkout -b feature-name",
-    description: "Create and immediately switch to a dedicated isolated branch for your new feature.",
+    description:
+      "Create and immediately switch to a dedicated isolated branch for your new feature.",
   },
   {
     label: "Shelf Work (Stash)",
     command: "git stash",
-    description: "Temporarily shelve uncommitted working directory changes to get a clean working tree.",
+    description:
+      "Temporarily shelve uncommitted working directory changes to get a clean working tree.",
   },
   {
     label: "Restore Work (Pop)",
     command: "git stash pop",
-    description: "Re-apply previously stashed changes back into your active working branch.",
+    description:
+      "Re-apply previously stashed changes back into your active working branch.",
   },
   {
     label: "Undo Last Commit",
     command: "git reset --soft HEAD~1",
-    description: "Undo the last commit while keeping all your modified code staged and ready to edit.",
+    description:
+      "Undo the last commit while keeping all your modified code staged and ready to edit.",
   },
 ];
 
@@ -109,28 +117,33 @@ const deploymentChecklist = [
   {
     title: "Environment Variables (.env) Configured",
     category: "Secrets & Security",
-    description: "Add DATABASE_URL, JWT_SECRET, and CLIENT_URL in Vercel/Render dashboard. Never commit secrets to Git.",
+    description:
+      "Add DATABASE_URL, JWT_SECRET, and CLIENT_URL in Vercel/Render dashboard. Never commit secrets to Git.",
     action: "DATABASE_URL=postgres://... JWT_SECRET=... CLIENT_URL=...",
     copyable: false,
   },
   {
     title: "Build Command Tested Locally",
     category: "Compile Verification",
-    description: "Run npm run build locally to ensure zero syntax, JSX, or bundling errors before pushing code.",
+    description:
+      "Run npm run build locally to ensure zero syntax, JSX, or bundling errors before pushing code.",
     action: "npm --prefix client run build",
     copyable: true,
   },
   {
     title: "CORS Origin Updated",
     category: "Network & API Access",
-    description: "Configure backend CORS middleware to accept your live deployed domain (e.g. https://collabx.vercel.app).",
-    action: "app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }))",
+    description:
+      "Configure backend CORS middleware to accept your live deployed domain (e.g. https://collabx.vercel.app).",
+    action:
+      "app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }))",
     copyable: true,
   },
   {
     title: "Live URL Verified for Leaderboard",
     category: "Deliverables & Showcase",
-    description: "Verify that both PPT and Live Demo URLs are live and accessible for 100% completed Leaderboard projects.",
+    description:
+      "Verify that both PPT and Live Demo URLs are live and accessible for 100% completed Leaderboard projects.",
     action: "https://your-project.vercel.app (Live & Responsive)",
     copyable: false,
   },
@@ -326,14 +339,16 @@ const resources = [
 function SectionHeading({ eyebrow, title, description }) {
   return (
     <div className="mb-5">
-      <span className="inline-block rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300">
+      <span className="inline-block rounded-full border border-[#D4DFD7] bg-[#EFF4F0] px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300">
         {eyebrow}
       </span>
       <h2 className="mt-2 text-xl font-extrabold tracking-tight text-[#141A18] dark:text-slate-100 sm:text-2xl">
         {title}
       </h2>
       {description && (
-        <p className="mt-1 text-sm text-[#5C6B66] dark:text-[#94A89D]">{description}</p>
+        <p className="mt-1 text-sm text-[#5C6B66] dark:text-[#94A89D]">
+          {description}
+        </p>
       )}
     </div>
   );
@@ -364,18 +379,19 @@ export default function DeveloperAssist() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#E3F3EB] text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
-                  <Terminal size={16} />
+                  <Terminal size={16} strokeWidth={1.85} />
                 </div>
                 <div>
                   <h4 className="text-sm font-extrabold uppercase tracking-wider text-[#141A18] dark:text-slate-100">
                     Daily Git Workflow
                   </h4>
                   <p className="text-xs text-[#5C6B66] dark:text-[#94A89D]">
-                    Standard sequence for synchronizing, staging, and committing code
+                    Standard sequence for synchronizing, staging, and committing
+                    code
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-[#bce784]/40 px-2.5 py-0.5 text-[11px] font-bold text-[#141A18] dark:bg-[#1D2B14] dark:text-[#A3E635]">
+              <span className="rounded-full bg-[#E3F3EB] px-2.5 py-0.5 text-[11px] font-bold text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
                 5 Commands
               </span>
             </div>
@@ -384,7 +400,7 @@ export default function DeveloperAssist() {
               {dailyGitCommands.map((item) => (
                 <div
                   key={item.command}
-                  className="group flex flex-col justify-between rounded-2xl border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-4 transition hover:border-[#1E2422]/30 hover:bg-white dark:hover:bg-[#1E2A24]"
+                  className="group flex flex-col justify-between rounded-2xl border border-[#E4ECE6] bg-[#FAFBF9] p-4 transition hover:border-[#1E2422]/30 hover:bg-white dark:border-[#1F2C26] dark:bg-[#111815] dark:hover:bg-[#1E2A24]"
                 >
                   <div>
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -394,17 +410,23 @@ export default function DeveloperAssist() {
                       <button
                         type="button"
                         onClick={() => handleCopy(item.command, item.command)}
-                        className="inline-flex items-center gap-1 rounded-full border border-[#D5E0D8] bg-white px-2.5 py-1 text-[11px] font-bold text-[#141A18] transition hover:border-[#2E8B63] hover:text-[#2E8B63] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:text-[#A3E635] cursor-pointer"
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-[#D5E0D8] bg-white px-2.5 py-1 text-[11px] font-bold text-[#141A18] transition hover:border-[#2E8B63] hover:text-[#2E8B63] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:text-[#A3E635]"
                         title="Copy command"
                       >
                         {copiedCommand === item.command ? (
                           <>
-                            <Check size={12} className="text-[#2E8B63] dark:text-[#4ADE80]" />
-                            <span className="text-[#2E8B63] dark:text-[#4ADE80]">Copied</span>
+                            <Check
+                              size={12}
+                              strokeWidth={2}
+                              className="text-[#2E8B63] dark:text-[#4ADE80]"
+                            />
+                            <span className="text-[#2E8B63] dark:text-[#4ADE80]">
+                              Copied
+                            </span>
                           </>
                         ) : (
                           <>
-                            <Copy size={12} />
+                            <Copy size={12} strokeWidth={1.85} />
                             <span>Copy</span>
                           </>
                         )}
@@ -426,19 +448,20 @@ export default function DeveloperAssist() {
           <div>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                  <GitBranch size={16} />
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#E3F3EB] text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
+                  <GitBranch size={16} strokeWidth={1.85} />
                 </div>
                 <div>
                   <h4 className="text-sm font-extrabold uppercase tracking-wider text-[#141A18] dark:text-slate-100">
-                    Branching & Conflict Fixes
+                    Branching &amp; Conflict Fixes
                   </h4>
                   <p className="text-xs text-[#5C6B66] dark:text-[#94A89D]">
-                    Feature branch isolation, stashing uncommitted work, and undoing commits
+                    Feature branch isolation, stashing uncommitted work, and
+                    undoing commits
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-bold text-amber-700 dark:text-amber-300">
+              <span className="rounded-full bg-[#E3F3EB] px-2.5 py-0.5 text-[11px] font-bold text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
                 4 Commands
               </span>
             </div>
@@ -447,7 +470,7 @@ export default function DeveloperAssist() {
               {branchingCommands.map((item) => (
                 <div
                   key={item.command}
-                  className="group flex flex-col justify-between rounded-2xl border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-4 transition hover:border-[#1E2422]/30 hover:bg-white dark:hover:bg-[#1E2A24]"
+                  className="group flex flex-col justify-between rounded-2xl border border-[#E4ECE6] bg-[#FAFBF9] p-4 transition hover:border-[#1E2422]/30 hover:bg-white dark:border-[#1F2C26] dark:bg-[#111815] dark:hover:bg-[#1E2A24]"
                 >
                   <div>
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -457,17 +480,23 @@ export default function DeveloperAssist() {
                       <button
                         type="button"
                         onClick={() => handleCopy(item.command, item.command)}
-                        className="inline-flex items-center gap-1 rounded-full border border-[#D5E0D8] bg-white px-2.5 py-1 text-[11px] font-bold text-[#141A18] transition hover:border-[#2E8B63] hover:text-[#2E8B63] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:text-[#A3E635] cursor-pointer"
+                        className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-[#D5E0D8] bg-white px-2.5 py-1 text-[11px] font-bold text-[#141A18] transition hover:border-[#2E8B63] hover:text-[#2E8B63] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:text-[#A3E635]"
                         title="Copy command"
                       >
                         {copiedCommand === item.command ? (
                           <>
-                            <Check size={12} className="text-[#2E8B63] dark:text-[#4ADE80]" />
-                            <span className="text-[#2E8B63] dark:text-[#4ADE80]">Copied</span>
+                            <Check
+                              size={12}
+                              strokeWidth={2}
+                              className="text-[#2E8B63] dark:text-[#4ADE80]"
+                            />
+                            <span className="text-[#2E8B63] dark:text-[#4ADE80]">
+                              Copied
+                            </span>
                           </>
                         ) : (
                           <>
-                            <Copy size={12} />
+                            <Copy size={12} strokeWidth={1.85} />
                             <span>Copy</span>
                           </>
                         )}
@@ -489,19 +518,20 @@ export default function DeveloperAssist() {
           <div>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/15 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
-                  <UploadCloud size={16} />
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#E3F3EB] text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
+                  <UploadCloud size={16} strokeWidth={1.85} />
                 </div>
                 <div>
                   <h4 className="text-sm font-extrabold uppercase tracking-wider text-[#141A18] dark:text-slate-100">
-                    Live Deployment Checklist (Vercel & Render)
+                    Live Deployment Checklist (Vercel &amp; Render)
                   </h4>
                   <p className="text-xs text-[#5C6B66] dark:text-[#94A89D]">
-                    4-point essential verification for seamless hosting and Leaderboard qualification
+                    4-point essential verification for seamless hosting and
+                    Leaderboard qualification
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-sky-500/15 px-2.5 py-0.5 text-[11px] font-bold text-sky-700 dark:text-sky-300">
+              <span className="rounded-full bg-[#E3F3EB] px-2.5 py-0.5 text-[11px] font-bold text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
                 4 Verification Checks
               </span>
             </div>
@@ -510,7 +540,7 @@ export default function DeveloperAssist() {
               {deploymentChecklist.map((item, index) => (
                 <div
                   key={item.title}
-                  className="flex flex-col justify-between rounded-2xl border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-4.5 transition hover:border-[#1E2422]/30 hover:bg-white dark:hover:bg-[#1E2A24]"
+                  className="flex flex-col justify-between rounded-2xl border border-[#E4ECE6] bg-[#FAFBF9] p-4.5 transition hover:border-[#1E2422]/30 hover:bg-white dark:border-[#1F2C26] dark:bg-[#111815] dark:hover:bg-[#1E2A24]"
                 >
                   <div>
                     <div className="mb-2.5 flex items-center justify-between gap-2">
@@ -531,19 +561,23 @@ export default function DeveloperAssist() {
                     </p>
                   </div>
 
-                  <div className="mt-3.5 flex items-center justify-between rounded-xl border border-[#D5E0D8] bg-[#EFF4F0] px-3 py-2 text-xs font-mono text-[#1E6B4B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-[#A3E635]">
+                  <div className="mt-3.5 flex items-center justify-between rounded-xl border border-[#D5E0D8] bg-[#EFF4F0] px-3 py-2 font-mono text-xs text-[#1E6B4B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-[#A3E635]">
                     <span className="truncate">{item.action}</span>
                     {item.copyable && (
                       <button
                         type="button"
                         onClick={() => handleCopy(item.action, item.action)}
-                        className="ml-2 shrink-0 text-[#5C6B66] hover:text-[#141A18] dark:text-[#94A89D] dark:hover:text-slate-100 cursor-pointer"
+                        className="ml-2 shrink-0 cursor-pointer text-[#5C6B66] hover:text-[#141A18] dark:text-[#94A89D] dark:hover:text-slate-100"
                         title="Copy snippet"
                       >
                         {copiedCommand === item.action ? (
-                          <Check size={13} className="text-[#2E8B63] dark:text-[#4ADE80]" />
+                          <Check
+                            size={13}
+                            strokeWidth={2}
+                            className="text-[#2E8B63] dark:text-[#4ADE80]"
+                          />
                         ) : (
-                          <Copy size={13} />
+                          <Copy size={13} strokeWidth={1.85} />
                         )}
                       </button>
                     )}
@@ -570,10 +604,10 @@ export default function DeveloperAssist() {
           return (
             <div
               key={item.title}
-              className="rounded-2xl border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 transition hover:border-[#1E2422]/30 hover:bg-white dark:hover:bg-[#1E2A24]"
+              className="rounded-2xl border border-[#E4ECE6] bg-[#FAFBF9] p-5 transition hover:border-[#1E2422]/30 hover:bg-white dark:border-[#1F2C26] dark:bg-[#111815] dark:hover:bg-[#1E2A24]"
             >
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100">
-                <Icon size={18} />
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full border border-[#D4DFD7] bg-white text-[#141A18] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-100">
+                <Icon size={18} strokeWidth={1.85} />
               </div>
 
               <h3 className="mb-1.5 text-sm font-bold text-[#141A18] dark:text-slate-100">
@@ -593,11 +627,15 @@ export default function DeveloperAssist() {
   return (
     <div className="space-y-7 text-[#141A18] dark:text-slate-100">
       {/* Hero Banner */}
-      <section className="relative overflow-hidden rounded-[28px] border border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A] p-7 shadow-2xs sm:p-9">
+      <section className="relative overflow-hidden rounded-[28px] border border-[#DDDAD0] bg-[#F2F0E9] p-7 shadow-2xs dark:border-[#2D362B] dark:bg-[#1B201A] sm:p-9">
         <div className="relative z-10 max-w-2xl">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#DDDAD0] dark:border-[#2D362B] bg-white dark:bg-[#0C120F] px-3.5 py-1.5 text-xs font-bold text-[#42504B] dark:text-slate-300">
-            <Sparkles size={14} className="text-[#2E8B63] dark:text-[#4ADE80]" />
-            YOUR DEVELOPMENT TOOLKIT
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#DDDAD0] bg-white px-3.5 py-1.5 text-xs font-bold text-[#42504B] dark:border-[#2D362B] dark:bg-[#0C120F] dark:text-slate-300">
+            <Sparkles
+              size={14}
+              strokeWidth={1.85}
+              className="text-[#2E8B63] dark:text-[#4ADE80]"
+            />
+            <span>YOUR DEVELOPMENT TOOLKIT</span>
           </div>
 
           <h1 className="text-3xl font-extrabold tracking-tight text-[#141A18] dark:text-slate-100 sm:text-4xl">
@@ -613,16 +651,21 @@ export default function DeveloperAssist() {
           </p>
 
           <button
+            type="button"
             onClick={() => {
               setActiveTool("git");
               document
                 .getElementById("developer-tools")
                 ?.scrollIntoView({ behavior: "smooth" });
             }}
-            className="mt-6 inline-flex items-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-6 py-3 text-sm font-bold shadow-xs"
+            className="group mt-6 inline-flex cursor-pointer items-center gap-2 rounded-full bg-[#141A17] px-6 py-3 text-sm font-bold text-white shadow-xs transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B]"
           >
             <span>Explore Developer Tools</span>
-            <ChevronRight size={17} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
+            <ChevronRight
+              size={17}
+              strokeWidth={1.85}
+              className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]"
+            />
           </button>
         </div>
 
@@ -655,14 +698,14 @@ export default function DeveloperAssist() {
           return (
             <div
               key={stat.label}
-              className="rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs"
+              className="rounded-[28px] border border-[#D4DFD7] bg-[#FAFBF9] p-5 shadow-2xs dark:border-[#1F2C26] dark:bg-[#111815]"
             >
               <div className="mb-3 flex items-center justify-between">
                 <p className="text-xs font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
                   {stat.label}
                 </p>
-                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100">
-                  <Icon size={17} />
+                <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-[#141A18] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-100">
+                  <Icon size={17} strokeWidth={1.85} />
                 </div>
               </div>
 
@@ -682,9 +725,9 @@ export default function DeveloperAssist() {
           description="Select a tool tab below — the interactive workspace updates right underneath."
         />
 
-        <div className="overflow-hidden rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-white dark:bg-[#111815] shadow-2xs">
+        <div className="overflow-hidden rounded-[28px] border border-[#D4DFD7] bg-white shadow-2xs dark:border-[#1F2C26] dark:bg-[#111815]">
           {/* Top Connected Tab Strip */}
-          <div className="grid grid-cols-1 divide-y divide-[#D4DFD7] dark:divide-[#1F2C26] border-b border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0]/75 dark:bg-[#141D19] sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
+          <div className="grid grid-cols-1 divide-y divide-[#D4DFD7] border-b border-[#D4DFD7] bg-[#EFF4F0]/75 dark:divide-[#1F2C26] dark:border-[#24322B] dark:bg-[#141D19] sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
             {tools.map((tool) => {
               const Icon = tool.icon;
               const isActive = activeTool === tool.id;
@@ -694,13 +737,12 @@ export default function DeveloperAssist() {
                   key={tool.id}
                   type="button"
                   onClick={() => setActiveTool(tool.id)}
-                  className={`relative flex flex-col justify-between p-5 text-left transition ${
+                  className={`relative flex cursor-pointer flex-col justify-between p-5 text-left transition ${
                     isActive
-                      ? "bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100"
-                      : "text-[#5C6B66] dark:text-[#94A89D] hover:bg-white/60 dark:hover:bg-[#1A2520]/80 hover:text-[#141A18] dark:hover:text-slate-100"
+                      ? "bg-white text-[#141A18] dark:bg-[#0C120F] dark:text-slate-100"
+                      : "text-[#5C6B66] hover:bg-white/60 hover:text-[#141A18] dark:text-[#94A89D] dark:hover:bg-[#1A2520]/80 dark:hover:text-slate-100"
                   }`}
                 >
-                  {/* Top Active Accent Bar */}
                   {isActive && (
                     <span className="absolute inset-x-0 top-0 h-1 bg-[#2E8B63]" />
                   )}
@@ -711,16 +753,16 @@ export default function DeveloperAssist() {
                         className={`flex h-10 w-10 items-center justify-center rounded-full transition ${
                           isActive
                             ? "bg-[#2E8B63] text-white"
-                            : "border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300"
+                            : "border border-[#D4DFD7] bg-white text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300"
                         }`}
                       >
-                        <Icon size={18} />
+                        <Icon size={18} strokeWidth={1.85} />
                       </div>
 
                       {isActive ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] px-2.5 py-0.5 text-[11px] font-bold text-[#1E6B4B] dark:text-[#6EE7B7]">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-[#2E8B63]/30 bg-[#E3F3EB] px-2.5 py-0.5 text-[11px] font-bold text-[#1E6B4B] dark:border-[#22C55E]/40 dark:bg-[#13291E] dark:text-[#6EE7B7]">
                           <span>Selected</span>
-                          <ChevronDown size={13} />
+                          <ChevronDown size={13} strokeWidth={2} />
                         </span>
                       ) : (
                         <span className="text-[11px] font-semibold text-[#6B7B75] dark:text-[#869B90]">
@@ -743,12 +785,12 @@ export default function DeveloperAssist() {
           </div>
 
           {/* Connected Workspace Body */}
-          <div className="bg-white dark:bg-[#0C120F] p-6 sm:p-8">
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[#E4ECE6] dark:border-[#1F2C26] pb-4">
+          <div className="bg-white p-6 dark:bg-[#0C120F] sm:p-8">
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[#E4ECE6] pb-4 dark:border-[#1F2C26]">
               <div className="flex items-center gap-3">
                 {activeToolObj && (
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]">
-                    <activeToolObj.icon size={19} />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#E3F3EB] text-[#1E6B4B] dark:bg-[#13291E] dark:text-[#6EE7B7]">
+                    <activeToolObj.icon size={19} strokeWidth={1.85} />
                   </div>
                 )}
                 <div>
@@ -761,7 +803,7 @@ export default function DeveloperAssist() {
                 </div>
               </div>
 
-              <span className="rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-3 py-1 text-[11px] font-bold text-[#42504B] dark:text-slate-300">
+              <span className="rounded-full border border-[#D4DFD7] bg-[#EFF4F0] px-3 py-1 text-[11px] font-bold text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300">
                 Active Workspace View
               </span>
             </div>
@@ -783,9 +825,9 @@ export default function DeveloperAssist() {
           {nextSteps.map((step, index) => (
             <div
               key={step.title}
-              className="flex gap-4 rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs"
+              className="flex gap-4 rounded-[28px] border border-[#D4DFD7] bg-[#FAFBF9] p-5 shadow-2xs dark:border-[#1F2C26] dark:bg-[#111815]"
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] text-xs font-extrabold text-[#141A18] dark:text-slate-100">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#D4DFD7] bg-white text-xs font-extrabold text-[#141A18] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-100">
                 0{index + 1}
               </div>
 
@@ -799,7 +841,7 @@ export default function DeveloperAssist() {
                     className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
                       step.priority === "High"
                         ? "border border-[#1E2422]/25 bg-[#1E2422]/8 text-[#141A18] dark:text-slate-100"
-                        : "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#42504B] dark:text-slate-300"
+                        : "border border-[#D4DFD7] bg-[#EFF4F0] text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300"
                     }`}
                   >
                     {step.priority}
@@ -810,7 +852,7 @@ export default function DeveloperAssist() {
                   {step.description}
                 </p>
 
-                <span className="mt-3 inline-block rounded-full border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-3 py-1 text-[10px] font-bold text-[#42504B] dark:text-slate-300">
+                <span className="mt-3 inline-block rounded-full border border-[#E4ECE6] bg-white px-3 py-1 text-[10px] font-bold text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300">
                   {step.tag}
                 </span>
               </div>
@@ -834,15 +876,16 @@ export default function DeveloperAssist() {
               href={resource.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="group rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs transition hover:border-[#1E2422]/40 hover:bg-white dark:hover:bg-[#1E2A24]"
+              className="group rounded-[28px] border border-[#D4DFD7] bg-[#FAFBF9] p-5 shadow-2xs transition hover:border-[#1E2422]/40 hover:bg-white dark:border-[#1F2C26] dark:bg-[#111815] dark:hover:bg-[#1E2A24]"
             >
               <div className="mb-3 flex items-center justify-between">
-                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100 transition group-hover:bg-[#1E2422] group-hover:text-white">
-                  <BookOpen size={16} />
+                <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-[#141A18] transition group-hover:bg-[#1E2422] group-hover:text-white dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-100">
+                  <BookOpen size={16} strokeWidth={1.85} />
                 </span>
                 <ChevronRight
                   size={16}
-                  className="text-[#5C6B66] dark:text-[#94A89D] transition group-hover:translate-x-1 group-hover:text-[#141A18]"
+                  strokeWidth={1.85}
+                  className="text-[#5C6B66] transition group-hover:translate-x-1 group-hover:text-[#141A18] dark:text-[#94A89D]"
                 />
               </div>
 
@@ -854,7 +897,7 @@ export default function DeveloperAssist() {
                 {resource.description}
               </p>
 
-              <span className="mt-3 inline-block rounded-full border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300">
+              <span className="mt-3 inline-block rounded-full border border-[#E4ECE6] bg-white px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#42504B] dark:border-[#24322B] dark:bg-[#0C120F] dark:text-slate-300">
                 {resource.tag}
               </span>
             </a>
@@ -862,10 +905,16 @@ export default function DeveloperAssist() {
         </div>
       </section>
 
-      <div className="flex items-center gap-2.5 rounded-2xl border border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A] p-4 text-xs font-medium text-[#42504B] dark:text-slate-300">
-        <Lightbulb size={17} className="shrink-0 text-[#141A18] dark:text-slate-100" />
-        Developer Assist uses built-in guides and checklists locally without
-        sending your code externally.
+      <div className="flex items-center gap-2.5 rounded-2xl border border-[#DDDAD0] bg-[#F2F0E9] p-4 text-xs font-medium text-[#42504B] dark:border-[#2D362B] dark:bg-[#1B201A] dark:text-slate-300">
+        <Lightbulb
+          size={17}
+          strokeWidth={1.85}
+          className="shrink-0 text-[#141A18] dark:text-slate-100"
+        />
+        <span>
+          Developer Assist uses built-in guides and checklists locally without
+          sending your code externally.
+        </span>
       </div>
     </div>
   );

@@ -19,7 +19,15 @@ import {
 } from "lucide-react";
 
 import api from "../../services/api";
-import { calculateProjectProgress, formatDate, getErrorMessage, getInitials, isValidHttpUrl, resolveProjectStatus, timeAgo } from "../../utils/portalHelpers";
+import {
+  calculateProjectProgress,
+  formatDate,
+  getErrorMessage,
+  getInitials,
+  isValidHttpUrl,
+  resolveProjectStatus,
+  timeAgo,
+} from "../../utils/portalHelpers";
 import EmbeddedProjectChat from "../../components/portal/EmbeddedProjectChat";
 import SearchableSelect from "../../components/portal/SearchableSelect";
 import {
@@ -29,11 +37,18 @@ import {
   Modal,
   ProgressBar,
   SectionCard,
-  StatusBadge,
   SuccessAlert,
   portalPrimaryBtnClass,
   portalSecondaryBtnClass,
 } from "../../components/portal/PortalUI";
+
+function NeutralPill({ label }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-md border border-black/12 bg-white px-2 py-0.5 text-[10px] font-bold text-neutral-800 dark:border-white/14 dark:bg-[#08080A] dark:text-neutral-200">
+      {label}
+    </span>
+  );
+}
 
 export default function AdminTeamDetail() {
   const { projectId } = useParams();
@@ -53,9 +68,15 @@ export default function AdminTeamDetail() {
           const isClippedBelow = rect.bottom > window.innerHeight;
           const isAboveHeader = rect.top < headerOffset;
           if (isAboveHeader) {
-            window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - headerOffset), behavior: "smooth" });
+            window.scrollTo({
+              top: Math.max(0, window.scrollY + rect.top - headerOffset),
+              behavior: "smooth",
+            });
           } else if (isClippedBelow) {
-            const desiredDelta = Math.min(rect.bottom - window.innerHeight + 24, rect.top - headerOffset);
+            const desiredDelta = Math.min(
+              rect.bottom - window.innerHeight + 24,
+              rect.top - headerOffset,
+            );
             if (desiredDelta > 0) {
               window.scrollBy({ top: desiredDelta, behavior: "smooth" });
             }
@@ -86,8 +107,15 @@ export default function AdminTeamDetail() {
       ]);
       const payload = teamRes.data?.data || teamRes.data;
       setData(payload);
-      setMentors((mentorsRes.data?.mentors || []).filter((m) => m.is_active !== false));
-      setSelectedMentorId(payload?.team?.mentor?.id ? String(payload.team.mentor.id) : "");
+      setMentors(
+        (Array.isArray(mentorsRes.data?.mentors)
+          ? mentorsRes.data.mentors
+          : []
+        ).filter((m) => m.is_active !== false),
+      );
+      setSelectedMentorId(
+        payload?.team?.mentor?.id ? String(payload.team.mentor.id) : "",
+      );
     } catch (err) {
       setError(getErrorMessage(err, "Unable to load team details."));
     } finally {
@@ -110,7 +138,9 @@ export default function AdminTeamDetail() {
       await api.patch(`/admin/projects/${projectId}/reassign-mentor`, {
         mentor_id: selectedMentorId ? Number(selectedMentorId) : null,
       });
-      setSuccess("Project mentor reassigned cleanly. Tasks, chats, and Drive resources remain intact.");
+      setSuccess(
+        "Project mentor reassigned cleanly. Tasks, chats, and Drive resources remain intact.",
+      );
       setShowReassign(false);
       await load();
     } catch (err) {
@@ -124,32 +154,65 @@ export default function AdminTeamDetail() {
 
   if (!data?.team) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 text-neutral-950 dark:text-white">
         <ErrorAlert message={error || "Team/Project not found."} />
-        <Link to="/admin/teams" className={portalSecondaryBtnClass}>
-          <ArrowLeft size={15} /> Back to Teams
+        <Link
+          to="/admin/teams"
+          className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
+        >
+          <ArrowLeft size={15} strokeWidth={1.85} />
+          <span>Back to Teams</span>
         </Link>
       </div>
     );
   }
 
   const { team, resources = {}, tasks = [], recentActivities = [] } = data;
+  const memberCount =
+    Number(team.memberCount) ||
+    (Array.isArray(team.members) ? team.members.length : 0);
+  const completedTasksCount = Number(team.taskProgress?.completed) || 0;
+  const totalTasksCount = Number(team.taskProgress?.total) || 0;
+  const pendingTasksCount = Number(team.taskProgress?.pending) || 0;
+
   const resourceLinks = [
-    { label: "GitHub Repository", url: resources.githubUrl, icon: FolderKanban },
-    { label: "Live Demo / Drive Folder", url: resources.demoUrl, icon: Globe },
-    { label: "Presentation / PPT Link", url: resources.pptUrl, icon: Presentation },
+    {
+      label: "GitHub Repository",
+      url: resources.githubUrl,
+      icon: FolderKanban,
+    },
+    {
+      label: "Live Demo / Drive Folder",
+      url: resources.demoUrl,
+      icon: Globe,
+    },
+    {
+      label: "Presentation / PPT Link",
+      url: resources.pptUrl,
+      icon: Presentation,
+    },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-neutral-950 dark:text-white">
+      {/* Top Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to="/admin/teams" className={portalSecondaryBtnClass}>
-          <ArrowLeft size={15} /> Back to Teams
+        <Link
+          to="/admin/teams"
+          className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
+        >
+          <ArrowLeft size={15} strokeWidth={1.85} />
+          <span>Back to Teams</span>
         </Link>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setShowReassign(true)} className={portalPrimaryBtnClass}>
-            <ArrowRightLeft size={14} /> Reassign Mentor
+          <button
+            type="button"
+            onClick={() => setShowReassign(true)}
+            className={`${portalPrimaryBtnClass} cursor-pointer rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+          >
+            <ArrowRightLeft size={14} strokeWidth={1.85} />
+            <span>Reassign Mentor</span>
           </button>
         </div>
       </div>
@@ -158,73 +221,89 @@ export default function AdminTeamDetail() {
       <SuccessAlert message={success} onDismiss={() => setSuccess("")} />
 
       {/* Header Summary Card */}
-      <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-2xs">
+      <div className="rounded-2xl border border-black/12 bg-white p-6 shadow-2xs dark:border-white/12 dark:bg-[#08080A]">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-extrabold tracking-tight text-[var(--text-primary)]">
+              <h1 className="text-2xl font-extrabold tracking-tight text-neutral-950 dark:text-white">
                 {team.title}
               </h1>
-              <StatusBadge status={resolveProjectStatus(team)} />
-              <StatusBadge status={team.priority} />
+              <NeutralPill label={resolveProjectStatus(team)} />
+              {team.priority && <NeutralPill label={team.priority} />}
             </div>
             {team.description && (
-              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]">
+              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
                 {team.description}
               </p>
             )}
           </div>
 
           <div className="flex flex-wrap gap-3 text-xs">
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-4 py-3">
-              <p className="font-bold uppercase tracking-wider text-[var(--text-muted)]">Assigned Mentor</p>
+            <div className="rounded-xl border border-black/10 bg-neutral-50 px-4 py-3 dark:border-white/10 dark:bg-[#101014]">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                Assigned Mentor
+              </p>
               {team.mentor ? (
                 <Link
                   to={`/admin/mentors/${team.mentor.id}`}
-                  className="mt-1 inline-flex items-center gap-1.5 text-sm font-extrabold text-[var(--accent-text)] hover:underline"
+                  className="mt-1 inline-flex items-center gap-1.5 text-sm font-extrabold text-neutral-950 hover:underline dark:text-white"
                 >
-                  <Award size={14} /> {team.mentor.name}
+                  <Award size={14} strokeWidth={1.85} />
+                  <span>{team.mentor.name}</span>
                 </Link>
               ) : (
-                <p className="mt-1 text-sm font-semibold text-[var(--text-muted)]">Unassigned</p>
+                <p className="mt-1 text-sm font-semibold text-neutral-500 dark:text-neutral-400">
+                  Unassigned
+                </p>
               )}
             </div>
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] px-4 py-3">
-              <p className="font-bold uppercase tracking-wider text-[var(--text-muted)]">Deadline</p>
-              <p className="mt-1 inline-flex items-center gap-1.5 text-sm font-extrabold text-[var(--text-primary)]">
-                <CalendarClock size={14} /> {formatDate(team.deadline)}
+
+            <div className="rounded-xl border border-black/10 bg-neutral-50 px-4 py-3 dark:border-white/10 dark:bg-[#101014]">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                Deadline
+              </p>
+              <p className="mt-1 inline-flex items-center gap-1.5 text-sm font-extrabold tabular-nums text-neutral-950 dark:text-white">
+                <CalendarClock size={14} strokeWidth={1.85} />
+                <span>{formatDate(team.deadline)}</span>
               </p>
             </div>
           </div>
         </div>
 
         <div className="mt-5">
-          <div className="mb-1.5 flex items-center justify-between text-xs font-bold">
-            <span className="text-[var(--text-secondary)]">
-              Project Progress · {team.taskProgress?.completed || 0}/{team.taskProgress?.total || 0} Tasks Completed
+          <div className="mb-1.5 flex items-center justify-between text-xs font-bold tabular-nums">
+            <span className="text-neutral-600 dark:text-neutral-400">
+              Project Progress · {completedTasksCount}/{totalTasksCount} Tasks
+              Completed
             </span>
           </div>
-          <ProgressBar value={calculateProjectProgress(team)} showLabel height="h-2.5" />
+          <ProgressBar
+            value={calculateProjectProgress(team)}
+            showLabel
+            height="h-2"
+          />
         </div>
 
         {/* Optional Official Team Chat Toggle */}
-        <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border-subtle)] pt-4">
+        <div className="mt-5 flex flex-wrap gap-2 border-t border-black/10 pt-4 dark:border-white/10">
           <button
             type="button"
             onClick={handleToggleChat}
             aria-expanded={showChat}
-            className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold shadow-2xs transition-all duration-200 cursor-pointer ${
+            className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition ${
               showChat
-                ? "border border-[#15803D]/30 bg-[#BEF264] text-[#141A18] hover:brightness-95 dark:border-[#A3E635] dark:bg-[#A3E635] dark:text-[#090D0B]"
-                : "border border-[#141A17] bg-[#141A17] text-[#BEF264] hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-[#A3E635] dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B]"
+                ? "border-black/25 bg-neutral-950 text-white dark:border-white/25 dark:bg-white dark:text-black"
+                : "border-black/15 bg-neutral-50 text-neutral-900 hover:border-black/35 hover:bg-neutral-100 dark:border-white/15 dark:bg-[#101014] dark:text-white dark:hover:border-white/35 dark:hover:bg-[#18181E]"
             }`}
           >
-            <MessageSquare size={14} className="shrink-0" />
-            <span>{showChat ? "Hide Official Team Chat" : "Official Team Chat"}</span>
+            <MessageSquare size={14} strokeWidth={1.85} className="shrink-0" />
+            <span>
+              {showChat ? "Hide Official Team Chat" : "Official Team Chat"}
+            </span>
             {showChat ? (
-              <ChevronUp size={14} className="shrink-0" />
+              <ChevronUp size={14} strokeWidth={1.85} className="shrink-0" />
             ) : (
-              <ChevronDown size={14} className="shrink-0" />
+              <ChevronDown size={14} strokeWidth={1.85} className="shrink-0" />
             )}
           </button>
         </div>
@@ -237,215 +316,259 @@ export default function AdminTeamDetail() {
       )}
 
       {/* Members & Deliverables */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            <SectionCard title={`Team Roster (${team.memberCount})`} subtitle="Team Leader and enrolled students">
-              <div className="space-y-2.5">
-                {team.teamLeader && (
-                  <Link
-                    to={`/admin/students/${team.teamLeader.id}`}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/8 p-3.5 transition hover:border-amber-500/60"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-extrabold text-[#090D0B]">
-                        {getInitials(team.teamLeader.name)}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="truncate text-xs font-extrabold text-[var(--text-primary)]">
-                            {team.teamLeader.name}
-                          </p>
-                          {(team.teamLeader.roll_no || team.teamLeader.rollNumber) && (
-                            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-mono font-bold text-amber-800 dark:text-amber-200">
-                              Roll: {team.teamLeader.roll_no || team.teamLeader.rollNumber}
-                            </span>
-                          )}
-                        </div>
-                        <p className="truncate text-[11px] text-[var(--text-muted)]">
-                          {team.teamLeader.email}
-                          {(team.teamLeader.roll_no || team.teamLeader.rollNumber)
-                            ? ` · ${team.teamLeader.roll_no || team.teamLeader.rollNumber}`
-                            : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300">
-                      <Crown size={12} /> Leader
-                    </span>
-                  </Link>
-                )}
-
-                {(team.members || []).map((m) => (
-                  <Link
-                    key={m.id}
-                    to={`/admin/students/${m.id}`}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3.5 transition hover:border-[#15803D]/50"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#141A17] text-[11px] font-bold text-[#BEF264] dark:bg-[#A3E635] dark:text-[#090D0B]">
-                        {getInitials(m.name)}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="truncate text-xs font-bold text-[var(--text-primary)]">{m.name}</p>
-                          {(m.roll_no || m.rollNumber) && (
-                            <span className="rounded-full bg-[var(--bg-surface-subtle)] px-2 py-0.5 text-[10px] font-mono font-bold text-[var(--text-secondary)]">
-                              Roll: {m.roll_no || m.rollNumber}
-                            </span>
-                          )}
-                        </div>
-                        <p className="truncate text-[11px] text-[var(--text-muted)]">
-                          {m.email}
-                          {(m.roll_no || m.rollNumber) ? ` · ${m.roll_no || m.rollNumber}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <span className="rounded-full bg-[var(--bg-surface-subtle)] px-2.5 py-0.5 text-[11px] font-bold capitalize text-[var(--text-secondary)]">
-                      {m.role || "Member"}
-                    </span>
-                  </Link>
-                ))}
-
-                {!team.teamLeader && (team.members || []).length === 0 && (
-                  <EmptyState icon={Users} title="No team members listed" />
-                )}
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Drive Resources & Deliverables" subtitle="Project repositories, decks, and demos">
-              <div className="space-y-3">
-                {resourceLinks.map((res) => {
-                  const Icon = res.icon;
-                  const valid = isValidHttpUrl(res.url);
-                  return (
-                    <div
-                      key={res.label}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-subtle)] text-[var(--accent-text)]">
-                          <Icon size={16} />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-[var(--text-primary)]">{res.label}</p>
-                          <p className="truncate text-[11px] text-[var(--text-muted)]">
-                            {valid ? res.url : "Not submitted yet"}
-                          </p>
-                        </div>
-                      </div>
-                      {valid && (
-                        <a
-                          href={res.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--border-subtle)] px-3 py-1.5 text-[11px] font-bold text-[var(--accent-text)] transition hover:border-[#15803D]"
-                        >
-                          Open <ExternalLink size={12} />
-                        </a>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <SectionCard
+          title={`Team Roster (${memberCount})`}
+          subtitle="Team Leader and enrolled students"
+          className="dark:!border-white/12 dark:!bg-[#08080A]"
+        >
+          <div className="space-y-2.5">
+            {team.teamLeader && (
+              <Link
+                to={`/admin/students/${team.teamLeader.id}`}
+                className="flex items-center justify-between gap-3 rounded-xl border border-black/15 bg-neutral-50 p-3.5 transition hover:border-black/35 dark:border-white/15 dark:bg-[#101014] dark:hover:border-white/35"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-950 text-xs font-extrabold text-white dark:bg-white dark:text-black">
+                    {getInitials(team.teamLeader.name)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="truncate text-xs font-extrabold text-neutral-950 dark:text-white">
+                        {team.teamLeader.name}
+                      </p>
+                      {(team.teamLeader.roll_no ||
+                        team.teamLeader.rollNumber) && (
+                        <span className="rounded-md border border-black/10 bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
+                          Roll:{" "}
+                          {team.teamLeader.roll_no ||
+                            team.teamLeader.rollNumber}
+                        </span>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            </SectionCard>
-          </div>
-
-          {/* Faculty Mentor Project Review */}
-          {team.mentorReview && (
-            <div className="rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-6 shadow-2xs">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E4ECE6] dark:border-[#1F2C26] pb-3 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1.5 rounded-full bg-[#15803D]/10 dark:bg-[#A3E635]/10 px-3 py-1 font-bold text-[#15803D] dark:text-[#A3E635]">
-                    <Award size={14} /> Official Faculty Mentor Review
-                  </span>
-                  <span className="font-semibold text-[#5C6B66] dark:text-[#94A89D]">
-                    {team.reviewedAt
-                      ? `Evaluated on ${formatDate(team.reviewedAt)}`
-                      : "Verified Evaluation"}
-                  </span>
+                    <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+                      {team.teamLeader.email}
+                      {team.teamLeader.roll_no || team.teamLeader.rollNumber
+                        ? ` · ${
+                            team.teamLeader.roll_no ||
+                            team.teamLeader.rollNumber
+                          }`
+                        : ""}
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[11px] font-semibold text-[#5C6B66] dark:text-[#94A89D]">
-                  Restricted: Team, Mentor &amp; Leadership Only
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-black/12 bg-white px-2.5 py-1 text-[11px] font-bold text-neutral-900 dark:border-white/14 dark:bg-[#08080A] dark:text-white">
+                  <Crown size={12} strokeWidth={1.9} />
+                  <span>Leader</span>
                 </span>
-              </div>
-              <div className="mt-4">
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#141A18] dark:text-slate-100 font-medium">
-                  {team.mentorReview}
-                </p>
-                {team.mentor?.name && (
-                  <p className="mt-3 text-xs font-bold text-[#5C6B66] dark:text-[#94A89D]">
-                    — {team.mentor.name} (Faculty Mentor)
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Tasks List */}
-          <SectionCard
-            title={`Project Tasks (${tasks.length})`}
-            subtitle={`${team.taskProgress?.completed || 0} completed · ${team.taskProgress?.pending || 0} pending`}
-          >
-            {tasks.length === 0 ? (
-              <EmptyState icon={CheckCircle2} title="No tasks yet" description="Tasks created for this team will appear here." />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] text-left text-xs">
-                  <thead className="border-b border-[var(--border-subtle)] text-[11px] font-extrabold uppercase text-[var(--text-muted)]">
-                    <tr>
-                      <th className="py-2.5 pr-4">Task</th>
-                      <th className="px-3 py-2.5">Assignee</th>
-                      <th className="px-3 py-2.5">Priority</th>
-                      <th className="px-3 py-2.5">Status</th>
-                      <th className="py-2.5 pl-3 text-right">Due Date</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--border-subtle)]">
-                    {tasks.map((t) => (
-                      <tr key={t.id}>
-                        <td className="py-3 pr-4">
-                          <p className="font-bold text-[var(--text-primary)]">{t.title}</p>
-                          {t.description && (
-                            <p className="mt-0.5 line-clamp-1 text-[11px] text-[var(--text-muted)]">{t.description}</p>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-[var(--text-secondary)]">
-                          {t.assignedTo?.name || "Unassigned"}
-                        </td>
-                        <td className="px-3 py-3">
-                          <StatusBadge status={t.priority} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <StatusBadge status={t.status} />
-                        </td>
-                        <td className="py-3 pl-3 text-right text-[var(--text-muted)]">{formatDate(t.dueDate)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              </Link>
             )}
-          </SectionCard>
 
-          {/* Project Activities */}
-          <SectionCard title="Recent Project Activities">
-            {recentActivities.length === 0 ? (
-              <EmptyState icon={Activity} title="No project activities logged yet" />
-            ) : (
-              <div className="divide-y divide-[var(--border-subtle)]">
-                {recentActivities.map((act) => (
-                  <div key={act.id} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                    <div>
-                      <p className="text-xs font-semibold text-[var(--text-primary)]">{act.description}</p>
-                      <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
-                        {act.user?.name || "System"} · {act.action}
+            {(team.members || []).map((m) => (
+              <Link
+                key={m.id}
+                to={`/admin/students/${m.id}`}
+                className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-3.5 transition hover:border-black/35 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-[11px] font-bold text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
+                    {getInitials(m.name)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                        {m.name}
+                      </p>
+                      {(m.roll_no || m.rollNumber) && (
+                        <span className="rounded-md border border-black/10 bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
+                          Roll: {m.roll_no || m.rollNumber}
+                        </span>
+                      )}
+                    </div>
+                    <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+                      {m.email}
+                      {m.roll_no || m.rollNumber
+                        ? ` · ${m.roll_no || m.rollNumber}`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+                <span className="rounded-md border border-black/10 bg-white px-2 py-0.5 text-[11px] font-semibold capitalize text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
+                  {m.role || "Member"}
+                </span>
+              </Link>
+            ))}
+
+            {!team.teamLeader && (team.members || []).length === 0 && (
+              <EmptyState icon={Users} title="No team members listed" />
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Drive Resources & Deliverables"
+          subtitle="Project repositories, decks, and demos"
+          className="dark:!border-white/12 dark:!bg-[#08080A]"
+        >
+          <div className="space-y-3">
+            {resourceLinks.map((res) => {
+              const Icon = res.icon;
+              const valid = isValidHttpUrl(res.url);
+              return (
+                <div
+                  key={res.label}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
+                      <Icon size={16} strokeWidth={1.85} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-neutral-950 dark:text-white">
+                        {res.label}
+                      </p>
+                      <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {valid ? res.url : "Not submitted yet"}
                       </p>
                     </div>
-                    <span className="shrink-0 text-[11px] text-[var(--text-muted)]">{timeAgo(act.createdAt)}</span>
                   </div>
-                ))}
-              </div>
+                  {valid && (
+                    <a
+                      href={res.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-black/15 bg-white px-3 py-1.5 text-[11px] font-bold text-neutral-900 transition hover:border-black/35 dark:border-white/15 dark:bg-[#08080A] dark:text-white dark:hover:border-white/35"
+                    >
+                      <span>Open</span>
+                      <ExternalLink size={12} strokeWidth={1.85} />
+                    </a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Faculty Mentor Project Review */}
+      {team.mentorReview && (
+        <div className="rounded-2xl border border-black/12 bg-white p-6 shadow-2xs dark:border-white/12 dark:bg-[#08080A]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 pb-3 text-xs dark:border-white/10">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-black/12 bg-neutral-100 px-2.5 py-1 font-bold text-neutral-900 dark:border-white/14 dark:bg-[#101014] dark:text-white">
+                <Award size={14} strokeWidth={1.85} />
+                <span>Official Faculty Mentor Review</span>
+              </span>
+              <span className="font-medium text-neutral-500 dark:text-neutral-400">
+                {team.reviewedAt
+                  ? `Evaluated on ${formatDate(team.reviewedAt)}`
+                  : "Verified Evaluation"}
+              </span>
+            </div>
+            <span className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+              Restricted: Team, Mentor &amp; Leadership Only
+            </span>
+          </div>
+          <div className="mt-4">
+            <p className="whitespace-pre-wrap text-sm font-medium leading-relaxed text-neutral-950 dark:text-neutral-100">
+              {team.mentorReview}
+            </p>
+            {team.mentor?.name && (
+              <p className="mt-3 text-xs font-bold text-neutral-500 dark:text-neutral-400">
+                — {team.mentor.name} (Faculty Mentor)
+              </p>
             )}
-          </SectionCard>
+          </div>
+        </div>
+      )}
+
+      {/* Tasks List */}
+      <SectionCard
+        title={`Project Tasks (${tasks.length})`}
+        subtitle={`${completedTasksCount} completed · ${pendingTasksCount} pending`}
+        className="dark:!border-white/12 dark:!bg-[#08080A]"
+      >
+        {tasks.length === 0 ? (
+          <EmptyState
+            icon={CheckCircle2}
+            title="No tasks yet"
+            description="Tasks created for this team will appear here."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-xs">
+              <thead className="border-b border-black/10 text-[11px] font-bold uppercase tracking-wider text-neutral-500 dark:border-white/10 dark:text-neutral-400">
+                <tr>
+                  <th className="py-2.5 pr-4">Task</th>
+                  <th className="px-3 py-2.5">Assignee</th>
+                  <th className="px-3 py-2.5">Priority</th>
+                  <th className="px-3 py-2.5">Status</th>
+                  <th className="py-2.5 pl-3 text-right">Due Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-black/10 dark:divide-white/10">
+                {tasks.map((t) => (
+                  <tr key={t.id}>
+                    <td className="py-3 pr-4">
+                      <p className="font-bold text-neutral-950 dark:text-white">
+                        {t.title}
+                      </p>
+                      {t.description && (
+                        <p className="mt-0.5 line-clamp-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                          {t.description}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-neutral-700 dark:text-neutral-300">
+                      {t.assignedTo?.name || "Unassigned"}
+                    </td>
+                    <td className="px-3 py-3">
+                      <NeutralPill label={t.priority || "Normal"} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <NeutralPill label={t.status || "Pending"} />
+                    </td>
+                    <td className="py-3 pl-3 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                      {formatDate(t.dueDate)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* Project Activities */}
+      <SectionCard
+        title="Recent Project Activities"
+        className="dark:!border-white/12 dark:!bg-[#08080A]"
+      >
+        {recentActivities.length === 0 ? (
+          <EmptyState icon={Activity} title="No project activities logged yet" />
+        ) : (
+          <div className="divide-y divide-black/10 dark:divide-white/10">
+            {recentActivities.map((act) => (
+              <div
+                key={act.id}
+                className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <div>
+                  <p className="text-xs font-semibold text-neutral-950 dark:text-white">
+                    {act.description}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                    {act.user?.name || "System"} · {act.action}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">
+                  {timeAgo(act.createdAt)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       {/* Reassign Mentor Modal */}
       <Modal
@@ -459,7 +582,7 @@ export default function AdminTeamDetail() {
               type="button"
               onClick={() => setShowReassign(false)}
               disabled={saving}
-              className={portalSecondaryBtnClass}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
             >
               Cancel
             </button>
@@ -467,16 +590,22 @@ export default function AdminTeamDetail() {
               type="submit"
               form="reassign-mentor-form"
               disabled={saving}
-              className={portalPrimaryBtnClass}
+              className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
             >
-              {saving ? "Reassigning..." : "Confirm Reassignment"}
+              <span>
+                {saving ? "Reassigning..." : "Confirm Reassignment"}
+              </span>
             </button>
           </>
         }
       >
-        <form id="reassign-mentor-form" onSubmit={handleReassignMentor} className="space-y-4 min-h-[280px]">
+        <form
+          id="reassign-mentor-form"
+          onSubmit={handleReassignMentor}
+          className="min-h-[280px] space-y-4"
+        >
           <div>
-            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
               Target Faculty Mentor
             </label>
             <SearchableSelect

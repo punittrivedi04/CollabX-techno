@@ -13,7 +13,14 @@ import {
 } from "lucide-react";
 
 import api from "../../services/api";
-import { calculateProjectProgress, formatDate, getErrorMessage, getInitials, resolveProjectStatus, timeAgo } from "../../utils/portalHelpers";
+import {
+  calculateProjectProgress,
+  formatDate,
+  getErrorMessage,
+  getInitials,
+  resolveProjectStatus,
+  timeAgo,
+} from "../../utils/portalHelpers";
 import SearchableSelect from "../../components/portal/SearchableSelect";
 import PortalErrorBoundary from "../../components/portal/PortalErrorBoundary";
 import {
@@ -23,11 +30,18 @@ import {
   Modal,
   ProgressBar,
   SectionCard,
-  StatusBadge,
   SuccessAlert,
   portalPrimaryBtnClass,
   portalSecondaryBtnClass,
 } from "../../components/portal/PortalUI";
+
+function NeutralPill({ label }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-md border border-black/12 bg-white px-2 py-0.5 text-[10px] font-bold text-neutral-800 dark:border-white/14 dark:bg-[#08080A] dark:text-neutral-200">
+      {label}
+    </span>
+  );
+}
 
 function AdminMentorDetailContent() {
   const { id } = useParams();
@@ -80,7 +94,11 @@ function AdminMentorDetailContent() {
             ? listRes.data.data
             : [];
         const others = mentorListRaw.filter(
-          (m) => m && m.id != null && String(m.id) !== String(id) && m.is_active !== false,
+          (m) =>
+            m &&
+            m.id != null &&
+            String(m.id) !== String(id) &&
+            m.is_active !== false,
         );
         setOtherMentors(others);
         setReplacementId(others.length > 0 ? String(others[0].id) : "");
@@ -99,7 +117,8 @@ function AdminMentorDetailContent() {
     };
   }, [id, reloadTick]);
 
-  const mentor = data?.mentor && typeof data.mentor === "object" ? data.mentor : null;
+  const mentor =
+    data?.mentor && typeof data.mentor === "object" ? data.mentor : null;
   const teams = Array.isArray(data?.teams)
     ? data.teams.filter(Boolean)
     : Array.isArray(data?.projects)
@@ -113,20 +132,25 @@ function AdminMentorDetailContent() {
   const recentActivities = Array.isArray(data?.recentActivities)
     ? data.recentActivities.filter(Boolean)
     : [];
-  const rawStats = data?.stats && typeof data.stats === "object" ? data.stats : {};
+  const rawStats =
+    data?.stats && typeof data.stats === "object" ? data.stats : {};
   const stats = {
-    assignedStudentCount: rawStats?.assignedStudentCount ?? assignedStudents.length,
+    assignedStudentCount:
+      rawStats?.assignedStudentCount ?? assignedStudents.length,
     directStudentCount: rawStats?.directStudentCount ?? 0,
     teamCount: rawStats?.teamCount ?? teams.length,
     activeProjectCount:
-      rawStats?.activeProjectCount ?? teams.filter((t) => resolveProjectStatus(t) !== "Completed").length,
+      rawStats?.activeProjectCount ??
+      teams.filter((t) => resolveProjectStatus(t) !== "Completed").length,
     completedProjectCount:
-      rawStats?.completedProjectCount ?? teams.filter((t) => resolveProjectStatus(t) === "Completed").length,
+      rawStats?.completedProjectCount ??
+      teams.filter((t) => resolveProjectStatus(t) === "Completed").length,
     avgProgress: rawStats?.avgProgress ?? 0,
   };
 
   const requiresReassignment =
-    (Number(stats?.directStudentCount) || 0) > 0 || (Number(stats?.teamCount) || 0) > 0;
+    (Number(stats?.directStudentCount) || 0) > 0 ||
+    (Number(stats?.teamCount) || 0) > 0;
 
   const handleDemote = async (e) => {
     e.preventDefault();
@@ -140,7 +164,9 @@ function AdminMentorDetailContent() {
           payload.unassignMentorship = true;
         } else {
           if (!replacementId) {
-            setError("Please select a replacement mentor or choose Unassign & Notify Team.");
+            setError(
+              "Please select a replacement mentor or choose Unassign & Notify Team.",
+            );
             setSaving(false);
             return;
           }
@@ -165,11 +191,20 @@ function AdminMentorDetailContent() {
       <div className="space-y-4">
         <ErrorAlert message={error || "Mentor profile not found."} />
         <div className="flex flex-wrap items-center gap-2.5">
-          <Link to="/admin/mentors" className={portalSecondaryBtnClass}>
-            <ArrowLeft size={15} /> Back to Mentors
+          <Link
+            to="/admin/mentors"
+            className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white`}
+          >
+            <ArrowLeft size={15} strokeWidth={1.85} />
+            <span>Back to Mentors</span>
           </Link>
-          <button type="button" onClick={triggerReload} className={portalPrimaryBtnClass}>
-            <RefreshCw size={14} /> Retry
+          <button
+            type="button"
+            onClick={triggerReload}
+            className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black`}
+          >
+            <RefreshCw size={14} strokeWidth={1.85} />
+            <span>Retry</span>
           </button>
         </div>
       </div>
@@ -182,17 +217,33 @@ function AdminMentorDetailContent() {
   const mentorActive = Boolean(mentor?.is_active ?? mentor?.isActive ?? true);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-neutral-950 dark:text-white">
+      {/* Top Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to="/admin/mentors" className={portalSecondaryBtnClass}>
-          <ArrowLeft size={15} /> Back to Mentors
+        <Link
+          to="/admin/mentors"
+          className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
+        >
+          <ArrowLeft size={15} strokeWidth={1.85} />
+          <span>Back to Mentors</span>
         </Link>
+
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={triggerReload} className={portalSecondaryBtnClass}>
-            <RefreshCw size={14} /> Refresh
+          <button
+            type="button"
+            onClick={triggerReload}
+            className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
+          >
+            <RefreshCw size={14} strokeWidth={1.85} />
+            <span>Refresh</span>
           </button>
-          <button type="button" onClick={() => setShowDemote(true)} className={portalSecondaryBtnClass}>
-            <UserCog size={14} /> Transition Role to Student
+          <button
+            type="button"
+            onClick={() => setShowDemote(true)}
+            className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
+          >
+            <UserCog size={14} strokeWidth={1.85} />
+            <span>Transition Role to Student</span>
           </button>
         </div>
       </div>
@@ -200,24 +251,29 @@ function AdminMentorDetailContent() {
       <ErrorAlert message={error} onDismiss={() => setError("")} />
       <SuccessAlert message={success} onDismiss={() => setSuccess("")} />
 
-      <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-2xs">
+      {/* Mentor Summary Card */}
+      <div className="rounded-2xl border border-black/12 bg-white p-6 shadow-2xs dark:border-white/12 dark:bg-[#08080A]">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#141A17] text-lg font-extrabold text-[#BEF264] dark:bg-[#A3E635] dark:text-[#090D0B]">
+            <div className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl border border-black/12 bg-neutral-100 text-base font-extrabold text-neutral-950 dark:border-white/15 dark:bg-[#101014] dark:text-white">
               {getInitials(mentorName)}
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-extrabold text-[var(--text-primary)]">{mentorName}</h1>
-                <StatusBadge status={mentorActive ? "Active" : "Inactive"} />
+                <h1 className="text-xl font-extrabold tracking-tight text-neutral-950 dark:text-white">
+                  {mentorName}
+                </h1>
+                <NeutralPill label={mentorActive ? "Active" : "Inactive"} />
               </div>
-              <div className="mt-1 flex flex-wrap gap-4 text-xs text-[var(--text-secondary)]">
+              <div className="mt-1 flex flex-wrap gap-4 text-xs text-neutral-600 dark:text-neutral-400">
                 <span className="inline-flex items-center gap-1.5">
-                  <Mail size={13} /> {mentorEmail}
+                  <Mail size={13} strokeWidth={1.85} />
+                  <span>{mentorEmail}</span>
                 </span>
                 {mentorPhone && (
                   <span className="inline-flex items-center gap-1.5">
-                    <Phone size={13} /> {mentorPhone}
+                    <Phone size={13} strokeWidth={1.85} />
+                    <span>{mentorPhone}</span>
                   </span>
                 )}
               </div>
@@ -233,9 +289,16 @@ function AdminMentorDetailContent() {
             ["Completed", stats?.completedProjectCount ?? 0],
             ["Avg Progress", `${stats?.avgProgress ?? 0}%`],
           ].map(([label, val]) => (
-            <div key={label} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3.5">
-              <p className="text-[11px] font-bold uppercase text-[var(--text-muted)]">{label}</p>
-              <p className="mt-1 text-xl font-extrabold text-[var(--text-primary)]">{val}</p>
+            <div
+              key={label}
+              className="rounded-xl border border-black/10 bg-neutral-50 p-3.5 dark:border-white/10 dark:bg-[#101014]"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                {label}
+              </p>
+              <p className="mt-1 text-xl font-extrabold tabular-nums text-neutral-950 dark:text-white">
+                {val}
+              </p>
             </div>
           ))}
         </div>
@@ -245,9 +308,14 @@ function AdminMentorDetailContent() {
       <SectionCard
         title="Assigned Teams & Projects"
         subtitle="Click any team to open full Project Details (members, tasks, resources, mentor reassignment)"
+        className="dark:!border-white/12 dark:!bg-[#08080A]"
       >
         {teams.length === 0 ? (
-          <EmptyState icon={FolderKanban} title="No teams assigned" description="Reassign teams to this mentor from Teams & Projects." />
+          <EmptyState
+            icon={FolderKanban}
+            title="No teams assigned"
+            description="Reassign teams to this mentor from Teams & Projects."
+          />
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {teams.map((t, idx) => {
@@ -256,21 +324,37 @@ function AdminMentorDetailContent() {
                 <>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-extrabold text-[var(--text-primary)]">
+                      <p className="truncate text-sm font-extrabold text-neutral-950 dark:text-white">
                         {t?.title || t?.name || "Untitled Project"}
                       </p>
-                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)]">
-                        <Crown size={12} className="text-amber-500" />
-                        Leader: {t?.teamLeader?.name || t?.owner?.name || "Unassigned"} · {t?.memberCount ?? 0} member(s)
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
+                        <Crown
+                          size={12}
+                          strokeWidth={1.9}
+                          className="shrink-0 text-neutral-500 dark:text-neutral-400"
+                        />
+                        <span className="truncate">
+                          Leader:{" "}
+                          {t?.teamLeader?.name ||
+                            t?.owner?.name ||
+                            "Unassigned"}{" "}
+                          · {t?.memberCount ?? 0} member(s)
+                        </span>
                       </p>
                     </div>
-                    <StatusBadge status={resolveProjectStatus(t)} />
+                    <NeutralPill label={resolveProjectStatus(t)} />
                   </div>
                   <div className="mt-3">
-                    <ProgressBar value={calculateProjectProgress(t)} showLabel height="h-2" />
+                    <ProgressBar
+                      value={calculateProjectProgress(t)}
+                      showLabel
+                      height="h-1.5"
+                    />
                   </div>
-                  <p className="mt-2 text-[11px] text-[var(--text-muted)]">
-                    Tasks: {t?.taskProgress?.completed ?? 0}/{t?.taskProgress?.total ?? 0} · Deadline: {formatDate(t?.deadline)}
+                  <p className="mt-2 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+                    Tasks: {t?.taskProgress?.completed ?? 0}/
+                    {t?.taskProgress?.total ?? 0} · Deadline:{" "}
+                    {formatDate(t?.deadline)}
                   </p>
                 </>
               );
@@ -279,7 +363,7 @@ function AdminMentorDetailContent() {
                 return (
                   <div
                     key={`team-${idx}`}
-                    className="block rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4"
+                    className="block rounded-xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]"
                   >
                     {teamCard}
                   </div>
@@ -290,7 +374,7 @@ function AdminMentorDetailContent() {
                 <Link
                   key={teamId}
                   to={`/admin/teams/${teamId}`}
-                  className="block rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-4 transition hover:border-[#15803D]/55"
+                  className="block rounded-xl border border-black/10 bg-neutral-50 p-4 transition hover:border-black/35 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35"
                 >
                   {teamCard}
                 </Link>
@@ -300,8 +384,12 @@ function AdminMentorDetailContent() {
         )}
       </SectionCard>
 
-      {/* Assigned Students (clickable to student profile) */}
-      <SectionCard title="Assigned Students" subtitle="Click any student to open their full profile">
+      {/* Assigned Students */}
+      <SectionCard
+        title="Assigned Students"
+        subtitle="Click any student to open their full profile"
+        className="dark:!border-white/12 dark:!bg-[#08080A]"
+      >
         {assignedStudents.length === 0 ? (
           <EmptyState icon={GraduationCap} title="No assigned students" />
         ) : (
@@ -310,29 +398,35 @@ function AdminMentorDetailContent() {
               const studentId = s?.id ?? s?._id;
               const studentName = s?.name || "Student";
               const studentEmail = s?.email || "—";
-              const studentActive = Boolean(s?.is_active ?? s?.isActive ?? true);
+              const studentRoll = s?.roll_no || s?.rollNumber;
+              const studentActive = Boolean(
+                s?.is_active ?? s?.isActive ?? true,
+              );
+
               const content = (
                 <>
                   <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#141A17] text-[11px] font-bold text-[#BEF264] dark:bg-[#A3E635] dark:text-[#090D0B]">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-[11px] font-extrabold text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
                       {getInitials(studentName)}
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <p className="truncate text-xs font-bold text-[var(--text-primary)]">{studentName}</p>
-                        {(s?.roll_no || s?.rollNumber) && (
-                          <span className="rounded-full bg-[var(--bg-surface-subtle)] px-2 py-0.5 text-[10px] font-mono font-bold text-[var(--text-secondary)]">
-                            Roll: {s.roll_no || s.rollNumber}
+                        <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                          {studentName}
+                        </p>
+                        {studentRoll && (
+                          <span className="rounded-md border border-black/10 bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
+                            Roll: {studentRoll}
                           </span>
                         )}
                       </div>
-                      <p className="truncate text-[11px] text-[var(--text-muted)]">
+                      <p className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
                         {studentEmail}
-                        {(s?.roll_no || s?.rollNumber) ? ` · ${s.roll_no || s.rollNumber}` : ""}
+                        {studentRoll ? ` · ${studentRoll}` : ""}
                       </p>
                     </div>
                   </div>
-                  <StatusBadge status={studentActive ? "Active" : "Inactive"} />
+                  <NeutralPill label={studentActive ? "Active" : "Inactive"} />
                 </>
               );
 
@@ -340,7 +434,7 @@ function AdminMentorDetailContent() {
                 return (
                   <div
                     key={`student-${idx}`}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3.5"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-3.5 dark:border-white/10 dark:bg-[#101014]"
                   >
                     {content}
                   </div>
@@ -351,7 +445,7 @@ function AdminMentorDetailContent() {
                 <Link
                   key={studentId}
                   to={`/admin/students/${studentId}`}
-                  className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface-elevated)] p-3.5 transition hover:border-[#15803D]/50"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-3.5 transition hover:border-black/35 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35"
                 >
                   {content}
                 </Link>
@@ -362,20 +456,28 @@ function AdminMentorDetailContent() {
       </SectionCard>
 
       {/* Recent Activities */}
-      <SectionCard title="Recent Activities">
+      <SectionCard
+        title="Recent Activities"
+        className="dark:!border-white/12 dark:!bg-[#08080A]"
+      >
         {recentActivities.length === 0 ? (
           <EmptyState icon={Activity} title="No recent activities" />
         ) : (
-          <div className="divide-y divide-[var(--border-subtle)]">
+          <div className="divide-y divide-black/10 dark:divide-white/10">
             {recentActivities.map((act, idx) => (
-              <div key={act?.id ?? `act-${idx}`} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
+              <div
+                key={act?.id ?? `act-${idx}`}
+                className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"
+              >
                 <div>
-                  <p className="text-xs font-semibold text-[var(--text-primary)]">
+                  <p className="text-xs font-semibold text-neutral-950 dark:text-white">
                     {act?.description || "Activity recorded"}
                   </p>
-                  <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{act?.action || "ACTIVITY"}</p>
+                  <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                    {act?.action || "ACTIVITY"}
+                  </p>
                 </div>
-                <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
+                <span className="shrink-0 text-[11px] text-neutral-500 dark:text-neutral-400">
                   {timeAgo(act?.createdAt || act?.created_at)}
                 </span>
               </div>
@@ -393,14 +495,19 @@ function AdminMentorDetailContent() {
       >
         <form onSubmit={handleDemote} className="space-y-4">
           {requiresReassignment ? (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-800 dark:text-amber-300">
+            <div className="rounded-xl border border-black/12 bg-neutral-50 p-3.5 text-xs text-neutral-800 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-200">
               <strong>{mentorName}</strong> currently manages{" "}
               <strong>{stats?.teamCount ?? 0} team(s)</strong> and{" "}
-              <strong>{stats?.directStudentCount ?? 0} directly assigned student(s)</strong>. Choose whether to transfer them to another active mentor or unassign and notify affected students.
+              <strong>
+                {stats?.directStudentCount ?? 0} directly assigned student(s)
+              </strong>
+              . Choose whether to transfer them to another active mentor or
+              unassign and notify affected students.
             </div>
           ) : (
-            <p className="text-xs text-[var(--text-secondary)]">
-              {mentorName} has no active team or student assignments and can be safely converted to a Student account.
+            <p className="text-xs text-neutral-600 dark:text-neutral-400">
+              {mentorName} has no active team or student assignments and can be
+              safely converted to a Student account.
             </p>
           )}
 
@@ -410,10 +517,10 @@ function AdminMentorDetailContent() {
                 <button
                   type="button"
                   onClick={() => setDemoteMode("reassign")}
-                  className={`rounded-2xl border px-3 py-2 text-xs font-bold transition cursor-pointer ${
+                  className={`cursor-pointer rounded-xl border px-3 py-2 text-xs font-bold transition ${
                     demoteMode === "reassign"
-                      ? "border-[#15803D] bg-[var(--accent-subtle)] text-[var(--accent-text)]"
-                      : "border-[var(--border-subtle)] text-[var(--text-secondary)]"
+                      ? "border-black/25 bg-neutral-950 text-white dark:border-white/25 dark:bg-white dark:text-black"
+                      : "border-black/12 bg-neutral-50 text-neutral-700 hover:border-black/30 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-white/30"
                   }`}
                 >
                   Reassign Mentor
@@ -421,10 +528,10 @@ function AdminMentorDetailContent() {
                 <button
                   type="button"
                   onClick={() => setDemoteMode("unassign")}
-                  className={`rounded-2xl border px-3 py-2 text-xs font-bold transition cursor-pointer ${
+                  className={`cursor-pointer rounded-xl border px-3 py-2 text-xs font-bold transition ${
                     demoteMode === "unassign"
-                      ? "border-amber-500 bg-amber-500/12 text-amber-700 dark:text-amber-300"
-                      : "border-[var(--border-subtle)] text-[var(--text-secondary)]"
+                      ? "border-black/25 bg-neutral-950 text-white dark:border-white/25 dark:bg-white dark:text-black"
+                      : "border-black/12 bg-neutral-50 text-neutral-700 hover:border-black/30 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-white/30"
                   }`}
                 >
                   Unassign &amp; Notify Team
@@ -432,7 +539,7 @@ function AdminMentorDetailContent() {
               </div>
               {demoteMode === "reassign" && (
                 <div>
-                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">
+                  <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
                     Replacement Active Mentor *
                   </label>
                   <SearchableSelect
@@ -452,11 +559,20 @@ function AdminMentorDetailContent() {
           )}
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setShowDemote(false)} disabled={saving} className={portalSecondaryBtnClass}>
+            <button
+              type="button"
+              onClick={() => setShowDemote(false)}
+              disabled={saving}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
+            >
               Cancel
             </button>
-            <button type="submit" disabled={saving} className={portalPrimaryBtnClass}>
-              {saving ? "Transitioning..." : "Confirm Role Change"}
+            <button
+              type="submit"
+              disabled={saving}
+              className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+            >
+              <span>{saving ? "Transitioning..." : "Confirm Role Change"}</span>
             </button>
           </div>
         </form>
@@ -472,8 +588,12 @@ export default function AdminMentorDetail() {
       key={id || "mentor-detail"}
       title="Mentor profile could not be rendered"
       fallbackAction={
-        <Link to="/admin/mentors" className={portalSecondaryBtnClass}>
-          <ArrowLeft size={14} /> Back to Mentors
+        <Link
+          to="/admin/mentors"
+          className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white`}
+        >
+          <ArrowLeft size={14} strokeWidth={1.85} />
+          <span>Back to Mentors</span>
         </Link>
       }
     >
