@@ -218,7 +218,7 @@ export default function Login() {
             to="/login"
             className="inline-flex shrink-0 items-baseline py-1 text-base font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-80 sm:text-lg"
           >
-            <span>collabx</span>
+            <span>CollabX</span>
             <span className="text-[#1E6B4B]">.</span>
           </Link>
 

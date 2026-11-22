@@ -84,8 +84,11 @@ const getId = (value) =>
 
 export default function Tasks() {
   const { user } = useAuth();
-  const isDirector =
-    String(user?.role || "").toLowerCase().trim() === "director";
+  const currentUserId = String(user?._id || user?.id || "");
+  const userRole = String(user?.role || "").toLowerCase().trim();
+  const isAdmin = userRole === "admin" || userRole === "coordinator";
+  const isMentor = userRole === "mentor";
+  const isDirector = userRole === "director";
 
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -101,6 +104,14 @@ export default function Tasks() {
   const [modalError, setModalError] = useState("");
 
   const todayStr = getTodayDateString();
+
+  const userOwnedProjects = useMemo(() => {
+    return projects.filter(
+      (p) => String(p.owner_id || p.owner?.id || p.owner?._id || p.owner || "") === currentUserId,
+    );
+  }, [projects, currentUserId]);
+
+  const canCreateTask = !isDirector && (isAdmin || isMentor || projects.length > 0);
 
   const selectedProject = useMemo(
     () =>
@@ -190,8 +201,18 @@ export default function Tasks() {
 
     people.forEach((person) => {
       const pId = getId(person);
-      if (pId) uniquePeople.set(pId, person);
+      if (pId) uniquePeople.set(String(pId), person);
     });
+
+    // Ensure current user is selectable for self-assignment if part of the project
+    if (user && currentUserId && !uniquePeople.has(currentUserId)) {
+      const isUserInProject =
+        String(project.owner_id || project.owner?.id || project.owner?._id || project.owner || "") === currentUserId ||
+        (Array.isArray(project.members) && project.members.some((m) => String(m.id || m._id) === currentUserId));
+      if (isUserInProject) {
+        uniquePeople.set(currentUserId, user);
+      }
+    }
 
     return Array.from(uniquePeople.values());
   };
@@ -352,13 +373,15 @@ export default function Tasks() {
           </p>
         </div>
 
-        <button
-          onClick={openCreateModal}
-          disabled={projects.length === 0}
-          className="inline-flex items-center justify-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus size={17} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" /> Create Task
-        </button>
+        {canCreateTask && (
+          <button
+            onClick={openCreateModal}
+            disabled={projects.length === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus size={17} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" /> Create Task
+          </button>
+        )}
       </div>
 
       {error && (
@@ -512,6 +535,26 @@ export default function Tasks() {
                 <div className="space-y-3">
                   {columnTasks.map((task) => {
                     const tId = task._id || task.id;
+                    const taskProjId = getId(task.project) || task.projectId || task.project_id;
+                    const taskProj = projects.find((p) => String(p._id || p.id) === String(taskProjId));
+                    const projOwnerId = String(
+                      taskProj?.owner_id ||
+                      taskProj?.owner?.id ||
+                      taskProj?.owner?._id ||
+                      taskProj?.owner ||
+                      task.project_owner_id ||
+                      task.projectOwnerId ||
+                      ""
+                    );
+                    const isMemberLeader = Boolean(
+                      taskProj?.members?.some(
+                        (m) =>
+                          String(m.id || m._id) === currentUserId &&
+                          String(m.role || "").toLowerCase() === "leader"
+                      )
+                    );
+                    const isTaskLeader = isAdmin || isMentor || (projOwnerId && projOwnerId === currentUserId) || isMemberLeader;
+
                     return (
                       <div
                         key={tId}
@@ -524,22 +567,24 @@ export default function Tasks() {
                             {task.priority}
                           </span>
 
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => openEditModal(task)}
-                              title="Edit task"
-                              className="rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] p-1.5"
-                            >
-                              <Pencil size={13} />
-                            </button>
-                            <button
-                              onClick={() => deleteTask(tId)}
-                              title="Delete task"
-                              className="rounded-full border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-1.5 text-[#42504B] dark:text-slate-300 transition hover:border-red-300 dark:hover:border-red-800/70 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-400"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
+                          {isTaskLeader && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => openEditModal(task)}
+                                title="Edit task"
+                                className="rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] p-1.5"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                onClick={() => deleteTask(tId)}
+                                title="Delete task"
+                                className="rounded-full border border-[#E4ECE6] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-1.5 text-[#42504B] dark:text-slate-300 transition hover:border-red-300 dark:hover:border-red-800/70 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-400"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <h4 className="text-sm font-bold leading-snug text-[#141A18] dark:text-slate-100">

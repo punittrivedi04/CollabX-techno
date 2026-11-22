@@ -3,9 +3,11 @@ import express from "express";
 import {
     getProjectTeam,
     sendInvitation,
+    resendInvitation,
     cancelInvitation,
     getMyInvitations,
     acceptInvitation,
+    acceptInvitationByToken,
     rejectInvitation,
     removeTeamMember,
     removeProjectMentor,
@@ -24,12 +26,14 @@ router.use(blockDirectorMutations("Director operates in read-only executive mode
 
 // Received invitations
 router.get("/invitations/received", getMyInvitations);
+router.post("/invitations/accept-token", acceptInvitationByToken);
 router.patch("/invitations/:invitationId/accept", acceptInvitation);
 router.patch("/invitations/:invitationId/reject", rejectInvitation);
 
 // Project team
 router.get("/:projectId", requireProjectMember("projectId"), getProjectTeam);
 router.post("/:projectId/invitations", requireProjectLeader("projectId"), sendInvitation);
+router.post("/:projectId/invitations/:invitationId/resend", requireProjectLeader("projectId"), resendInvitation);
 router.delete("/:projectId/invitations/:invitationId", cancelInvitation);
 
 // Membership management

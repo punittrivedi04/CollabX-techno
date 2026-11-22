@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Award,
-  Eye,
   FolderKanban,
   RefreshCw,
   Search,
@@ -56,6 +55,7 @@ export default function DirectorReports() {
   // Executive Drill-Down Inspection states
   const [inspectProjectId, setInspectProjectId] = useState(null);
   const [inspectMentorId, setInspectMentorId] = useState(null);
+  const [inspectStudentId, setInspectStudentId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,10 +106,6 @@ export default function DirectorReports() {
             <p className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
               Executive Director · Analytics &amp; Reports
             </p>
-            <NeutralBadge>
-              <Eye size={11} strokeWidth={1.85} />
-              <span>Strictly Read-Only</span>
-            </NeutralBadge>
           </div>
           <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-neutral-950 dark:text-white sm:text-3xl">
             Institute Reports
@@ -229,6 +225,7 @@ export default function DirectorReports() {
               <option value="In Progress">In Progress</option>
               <option value="On Hold">On Hold</option>
               <option value="Completed">Completed</option>
+              <option value="Archived">Archived</option>
             </select>
 
             <select
@@ -253,7 +250,7 @@ export default function DirectorReports() {
         /* Tab 1: Faculty Mentors Summary Table */
         <SectionCard
           title="Faculty Mentors Summary"
-          subtitle="Read-only mentorship workload, team distribution, and overall project completion progress"
+          subtitle="Mentorship workload, team distribution, and overall project completion progress"
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           {mentors.length === 0 ? (
@@ -350,7 +347,7 @@ export default function DirectorReports() {
         /* Tab 2: Project Progress & Deadlines Table */
         <SectionCard
           title={`Project Progress & Deadlines (${filteredProjects.length})`}
-          subtitle="Read-only project health, overall completion percentage, and deadlines (task lists and chat strictly excluded)"
+          subtitle="Project health, overall completion percentage, and deadlines (task lists and chat strictly excluded)"
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           {filteredProjects.length === 0 ? (
@@ -466,17 +463,26 @@ export default function DirectorReports() {
       <DirectorInspectDrawer
         projectId={inspectProjectId}
         mentorId={inspectMentorId}
+        studentId={inspectStudentId}
         onClose={() => {
           setInspectProjectId(null);
           setInspectMentorId(null);
+          setInspectStudentId(null);
         }}
         onSelectProject={(pid) => {
           setInspectMentorId(null);
+          setInspectStudentId(null);
           setInspectProjectId(pid);
         }}
         onSelectMentor={(mid) => {
           setInspectProjectId(null);
+          setInspectStudentId(null);
           setInspectMentorId(mid);
+        }}
+        onSelectStudent={(sid) => {
+          setInspectProjectId(null);
+          setInspectMentorId(null);
+          setInspectStudentId(sid);
         }}
       />
     </div>

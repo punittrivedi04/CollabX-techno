@@ -28,13 +28,13 @@ pool.on("error", (err) => {
     console.error("[PostgreSQL Pool] Unexpected error on idle client:", err.message);
 });
 
-// Wrapped query helper with duration measurement and slow query warnings (> 200ms)
+// Wrapped query helper with duration measurement and slow query warnings (> 500ms in dev or when DEBUG_DB=true)
 export const query = async (text, params) => {
     const start = Date.now();
     try {
         const result = await pool.query(text, params);
         const duration = Date.now() - start;
-        if (duration > 200) {
+        if (duration > 500 && (process.env.NODE_ENV !== "production" || process.env.DEBUG_DB === "true")) {
             const preview = typeof text === "string" ? text.slice(0, 140).replace(/\s+/g, " ") : "Non-string SQL";
             console.warn(`[PostgreSQL Slow Query] ${duration}ms: ${preview}`);
         }
@@ -88,10 +88,10 @@ const SCHEMA_MIGRATION_QUERIES = [
     // Correct falsely marked "Completed" projects where tasks are incomplete or 0 tasks exist
     `UPDATE projects p
      SET status = 'In Progress'
-     WHERE LOWER(status) = 'completed'
+     WHERE LOWER(TRIM(COALESCE(status, ''))) = 'completed'
        AND (
          (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) = 0
-         OR (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') < (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id)
+         OR (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')) > 0
        );`,
     // Function & trigger to maintain synchronized task progress and status guards on tasks changes
     `CREATE OR REPLACE FUNCTION sync_project_progress()
@@ -106,7 +106,7 @@ const SCHEMA_MIGRATION_QUERIES = [
          IF target_project_id IS NOT NULL THEN
              SELECT 
                  COUNT(*)::int,
-                 COUNT(*) FILTER (WHERE status = 'Completed')::int
+                 COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('completed', 'done'))::int
              INTO v_total, v_completed
              FROM tasks
              WHERE project_id = target_project_id;
@@ -117,14 +117,25 @@ const SCHEMA_MIGRATION_QUERIES = [
                  v_progress := 0;
              END IF;
 
-             UPDATE projects
-             SET progress = v_progress,
-                 status = CASE 
-                     WHEN status = 'Completed' AND (v_total = 0 OR v_completed < v_total) THEN 'In Progress'
-                     ELSE status
-                 END,
-                 updated_at = NOW()
-             WHERE id = target_project_id;
+             IF (v_total = 0 OR v_completed < v_total) THEN
+                 UPDATE projects
+                 SET progress = v_progress,
+                     status = CASE 
+                         WHEN LOWER(TRIM(COALESCE(status, ''))) = 'completed' THEN 'In Progress'
+                         ELSE status
+                     END,
+                     updated_at = NOW()
+                 WHERE id = target_project_id;
+             ELSE
+                 UPDATE projects
+                 SET progress = v_progress,
+                     status = CASE 
+                         WHEN v_total > 0 AND v_completed = v_total AND LOWER(TRIM(COALESCE(status, ''))) IN ('in progress', 'planning') THEN 'Completed'
+                         ELSE status
+                     END,
+                     updated_at = NOW()
+                 WHERE id = target_project_id;
+             END IF;
          END IF;
          RETURN NULL;
      END;
@@ -133,15 +144,15 @@ const SCHEMA_MIGRATION_QUERIES = [
     `CREATE TRIGGER trg_sync_project_progress
      AFTER INSERT OR UPDATE OF status, project_id OR DELETE ON tasks
      FOR EACH ROW EXECUTE FUNCTION sync_project_progress();`,
-    // Clean up projects table so only 100% completed projects with both PPT and Live Demo link remain on leaderboard
-    `UPDATE projects
-     SET is_on_leaderboard = FALSE
-     WHERE is_on_leaderboard = TRUE
-       AND (
-         (LOWER(COALESCE(status, '')) != 'completed' OR COALESCE(progress, 0) != 100)
-         OR ppt_url IS NULL OR TRIM(ppt_url) = '' OR NOT (ppt_url ~* '^https?://')
-         OR demo_url IS NULL OR TRIM(demo_url) = '' OR NOT (demo_url ~* '^https?://')
-       );`,
+    // Ensure invitations columns token and expires_at exist with 48h expiration
+    "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS token VARCHAR;",
+    "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;",
+    `UPDATE invitations
+     SET expires_at = created_at + INTERVAL '48 hours'
+     WHERE expires_at IS NULL;`,
+    `UPDATE invitations
+     SET status = 'Expired'
+     WHERE status = 'Pending' AND expires_at IS NOT NULL AND expires_at < NOW();`,
 ];
 
 const PERFORMANCE_INDEX_QUERIES = [
@@ -185,6 +196,7 @@ const PERFORMANCE_INDEX_QUERIES = [
     "CREATE INDEX IF NOT EXISTS idx_invitations_recipient_status ON invitations (recipient_id, status);",
     "CREATE INDEX IF NOT EXISTS idx_invitations_project_status ON invitations (project_id, status);",
     "CREATE INDEX IF NOT EXISTS idx_invitations_email_status ON invitations (LOWER(recipient_email), status);",
+    "CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations (token);",
 ];
 
 export const ensureSchemaMigrations = async () => {

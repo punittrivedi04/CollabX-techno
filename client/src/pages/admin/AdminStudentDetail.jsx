@@ -9,6 +9,7 @@ import {
   Mail,
   Phone,
   Power,
+  Trash2,
   UserCog,
 } from "lucide-react";
 
@@ -53,6 +54,8 @@ export default function AdminStudentDetail() {
 
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,6 +111,20 @@ export default function AdminStudentDetail() {
     }
   };
 
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await api.delete(`/admin/users/${id}`);
+      navigate("/admin/students", { replace: true });
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete student."));
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
   if (loading) return <LoadingState label="Loading student profile..." />;
 
   if (!data?.student) {
@@ -133,6 +150,34 @@ export default function AdminStudentDetail() {
     taskProgress = {},
     activityHistory = [],
   } = data;
+
+  const totalTasksCount =
+    typeof taskProgress.total === "number"
+      ? taskProgress.total
+      : typeof taskProgress.totalTasks === "number"
+        ? taskProgress.totalTasks
+        : Array.isArray(tasks)
+          ? tasks.length
+          : 0;
+
+  const completedTasksCount =
+    typeof taskProgress.completed === "number"
+      ? taskProgress.completed
+      : typeof taskProgress.completedTasks === "number"
+        ? taskProgress.completedTasks
+        : Array.isArray(tasks)
+          ? tasks.filter((t) => {
+              const s = String(t.status || "").trim().toLowerCase();
+              return s === "completed" || s === "done";
+            }).length
+          : 0;
+
+  const completionRateVal =
+    typeof taskProgress.completionRate === "number"
+      ? taskProgress.completionRate
+      : totalTasksCount > 0
+        ? Math.round((completedTasksCount / totalTasksCount) * 100)
+        : 0;
 
   return (
     <div className="space-y-6 text-neutral-950 dark:text-white">
@@ -162,6 +207,14 @@ export default function AdminStudentDetail() {
           >
             <Power size={14} strokeWidth={1.85} />
             <span>{student.is_active ? "Deactivate" : "Activate"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-900/60"
+          >
+            <Trash2 size={14} strokeWidth={1.85} />
+            <span>Delete Student</span>
           </button>
         </div>
       </div>
@@ -229,9 +282,9 @@ export default function AdminStudentDetail() {
         <div className="mt-6 grid gap-3 sm:grid-cols-4">
           {[
             ["Teams / Projects", teams.length],
-            ["Total Tasks", taskProgress.total ?? 0],
-            ["Completed Tasks", taskProgress.completed ?? 0],
-            ["Completion Rate", `${taskProgress.completionRate ?? 0}%`],
+            ["Total Tasks", totalTasksCount],
+            ["Completed Tasks", completedTasksCount],
+            ["Completion Rate", `${completionRateVal}%`],
           ].map(([label, val]) => (
             <div
               key={label}
@@ -384,6 +437,17 @@ export default function AdminStudentDetail() {
         title="Promote Student to Mentor?"
         confirmLabel="Promote to Mentor"
         message={`Promote ${student.name} to Mentor? Their session will be refreshed and logged in the audit trail.`}
+      />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => !deleting && setConfirmDelete(false)}
+        onConfirm={handleDelete}
+        busy={deleting}
+        tone="danger"
+        title="Delete Student Account Permanently"
+        confirmLabel="Delete Student"
+        message={`Are you sure you want to permanently delete the account for "${student.name}" (${student.email})? This action will clean up squad memberships, unassign tasks, and revoke access tokens. This action is irreversible.`}
       />
     </div>
   );

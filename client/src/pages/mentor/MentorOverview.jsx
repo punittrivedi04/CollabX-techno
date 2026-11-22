@@ -158,7 +158,7 @@ export default function MentorOverview() {
     {
       label: "Upcoming Deadlines",
       value: upcomingDeadlines.length,
-      to: "/mentor/tasks",
+      to: "/mentor/teams",
       icon: CalendarClock,
     },
   ];
@@ -383,6 +383,14 @@ export default function MentorOverview() {
               title="Upcoming Deadlines"
               subtitle="Projects and tasks due soon"
               className="dark:!border-white/12 dark:!bg-[#08080A]"
+              action={
+                <Link
+                  to="/mentor/teams"
+                  className="text-xs font-bold text-neutral-900 hover:underline dark:text-white"
+                >
+                  View Teams →
+                </Link>
+              }
             >
               {upcomingDeadlines.length === 0 ? (
                 <p className="rounded-xl border border-black/10 bg-neutral-50 p-4 text-xs font-medium text-neutral-500 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-400">

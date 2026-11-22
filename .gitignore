@@ -1,35 +1,7 @@
-# Dependencies
-node_modules/
-**/node_modules/
-
-# Build files
-dist/
-**/dist/
-build/
-coverage/
-
-# Environment secrets
+﻿node_modules/
 .env
-.env.*
-!.env.example
-**/.env
-**/.env.*
-!**/.env.example
-
-# Logs
-*.log
-npm-debug.log*
-
-# OS and editor
+.env.local
+.env.*.local
+dist/
+build/
 .DS_Store
-Thumbs.db
-.vscode/  # Local testing and password utilities
-server/check-login.js
-server/reset-and-test.js
-server/reset-password.js
-server/controllers/Notification.js
-
-# Database dumps (keep canonical schema.sql only)
-*.sql
-!schema.sql
-!server/schema.sql

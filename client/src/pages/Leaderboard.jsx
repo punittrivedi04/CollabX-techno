@@ -67,6 +67,8 @@ function NeutralBadge({ children, className = "" }) {
 
 export default function Leaderboard() {
   const { user } = useAuth();
+  const role = String(user?.role || "").toLowerCase();
+  const isAdmin = role === "admin" || role === "coordinator";
 
   const [projects, setProjects] = useState([]);
   const [eligibleProjects, setEligibleProjects] = useState([]);
@@ -225,6 +227,9 @@ export default function Leaderboard() {
       setSelectedProject((prev) =>
         prev && String(prev.id) === String(projectId) ? null : prev,
       );
+      setInspectingStarsProject((prev) =>
+        prev && String(prev.id) === String(projectId) ? null : prev,
+      );
     };
 
     socket.on("leaderboard:star_update", handleStarUpdate);
@@ -318,16 +323,18 @@ export default function Leaderboard() {
 
   const handleWithdrawProject = async (projectId) => {
     if (submittingId) return;
-    if (!window.confirm("Withdraw this project from the College Leaderboard?"))
+    if (!window.confirm("Remove / withdraw this project from the College Leaderboard? All star endorsements will be reset."))
       return;
     setSubmittingId(projectId);
     setError("");
     setSuccess("");
     try {
       const res = await api.delete(`/leaderboard/projects/${projectId}/submit`);
-      setSuccess(res.data?.message || "Project withdrawn from Leaderboard.");
+      setSuccess(res.data?.message || "Project removed from Leaderboard.");
       await loadLeaderboard(true);
       setShowSubmitModal(false);
+      setSelectedProject((prev) => (prev?.id === projectId ? null : prev));
+      setInspectingStarsProject((prev) => (prev?.id === projectId ? null : prev));
     } catch (err) {
       setError(getErrorMessage(err, "Failed to withdraw project."));
     } finally {
@@ -403,20 +410,36 @@ export default function Leaderboard() {
           </div>
 
           <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-            {eligibleProjects.length > 0 && (
+            {isAdmin ? (
               <button
                 type="button"
                 onClick={() => setShowSubmitModal(true)}
                 className={`${portalPrimaryBtnClass} w-full justify-center rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200 sm:w-auto`}
               >
                 <Sparkles size={14} strokeWidth={1.85} />
-                <span>Submit My Project</span>
-                {myEligibleCount > 0 && (
+                <span>Manage Leaderboard</span>
+                {eligibleProjects.length > 0 && (
                   <span className="ml-1 rounded-md border border-white/20 bg-white/15 px-2 py-0.5 text-[10px] font-bold tabular-nums dark:border-black/15 dark:bg-black/10">
-                    {myEligibleCount} Ready
+                    {eligibleProjects.length} Completed
                   </span>
                 )}
               </button>
+            ) : (
+              eligibleProjects.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSubmitModal(true)}
+                  className={`${portalPrimaryBtnClass} w-full justify-center rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200 sm:w-auto`}
+                >
+                  <Sparkles size={14} strokeWidth={1.85} />
+                  <span>Submit My Project</span>
+                  {myEligibleCount > 0 && (
+                    <span className="ml-1 rounded-md border border-white/20 bg-white/15 px-2 py-0.5 text-[10px] font-bold tabular-nums dark:border-black/15 dark:bg-black/10">
+                      {myEligibleCount} Ready
+                    </span>
+                  )}
+                </button>
+              )
             )}
 
             <button
@@ -493,7 +516,16 @@ export default function Leaderboard() {
                 : "Completed projects submitted by their Project Leaders will be ranked here. Only 100% finished projects are eligible!"
             }
             action={
-              eligibleProjects.length > 0 ? (
+              isAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => setShowSubmitModal(true)}
+                  className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+                >
+                  <Sparkles size={14} strokeWidth={1.85} />
+                  <span>Manage / Feature Projects</span>
+                </button>
+              ) : eligibleProjects.length > 0 ? (
                 <button
                   type="button"
                   onClick={() => setShowSubmitModal(true)}
@@ -678,14 +710,28 @@ export default function Leaderboard() {
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProject(proj)}
-                      className="inline-flex cursor-pointer items-center gap-1 text-xs font-bold text-neutral-900 transition hover:underline dark:text-white"
-                    >
-                      <span>Inspect Project</span>
-                      <ExternalLink size={13} strokeWidth={1.85} />
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProject(proj)}
+                        className="inline-flex cursor-pointer items-center gap-1 text-xs font-bold text-neutral-900 transition hover:underline dark:text-white"
+                      >
+                        <span>Inspect Project</span>
+                        <ExternalLink size={13} strokeWidth={1.85} />
+                      </button>
+
+                      {(isAdmin || (user && (Number(proj.teamLeader?.id ?? proj.owner_id) === Number(user.id)))) && (
+                        <button
+                          type="button"
+                          disabled={submittingId === proj.id}
+                          onClick={() => handleWithdrawProject(proj.id)}
+                          className="inline-flex cursor-pointer items-center gap-1 text-xs font-bold text-rose-600 transition hover:underline dark:text-rose-400"
+                          title="Remove this project from the Leaderboard"
+                        >
+                          <span>{submittingId === proj.id ? "Removing..." : "Remove"}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -945,6 +991,18 @@ export default function Leaderboard() {
                       : "Give Star"}
                   </span>
                 </button>
+
+                {(isAdmin || (user && (Number(selectedProject.teamLeader?.id ?? selectedProject.owner_id) === Number(user.id)))) && (
+                  <button
+                    type="button"
+                    disabled={submittingId === selectedProject.id}
+                    onClick={() => handleWithdrawProject(selectedProject.id)}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-900/60"
+                    title="Remove this project from the Leaderboard"
+                  >
+                    <span>{submittingId === selectedProject.id ? "Removing..." : "Remove from Leaderboard"}</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -955,21 +1013,26 @@ export default function Leaderboard() {
       <Modal
         open={showSubmitModal}
         onClose={() => !submittingId && setShowSubmitModal(false)}
-        title="Submit Project to College Leaderboard"
-        description="Only 100% completed projects with both Presentation (PPT) and Live Demo links can be published by their Project Leader."
+        title={isAdmin ? "Manage College Leaderboard" : "Submit Project to College Leaderboard"}
+        description={
+          isAdmin
+            ? "Directly feature eligible 100% completed projects with Presentation & Demo links, or remove projects from the College Leaderboard."
+            : "Only 100% completed projects with both Presentation (PPT) and Live Demo links can be published by their Project Leader."
+        }
         size="max-w-xl"
       >
         <div className="space-y-4">
           <p className="text-xs leading-relaxed text-neutral-600 dark:text-neutral-400">
-            Publishing your project showcases your live demo and presentation
-            across the institute. Both PPT and Live Demo links must remain
-            active to stay on the Leaderboard.
+            {isAdmin
+              ? "All eligible 100% completed student projects across squads appear below. Standout projects with active PPT and Live Demo links can be featured or removed as needed."
+              : "Publishing your project showcases your live demo and presentation across the institute. Both PPT and Live Demo links must remain active to stay on the Leaderboard."}
           </p>
 
           {eligibleProjects.length === 0 ? (
             <div className="rounded-xl border border-dashed border-black/15 bg-neutral-50 p-6 text-center text-xs text-neutral-500 dark:border-white/15 dark:bg-[#101014] dark:text-neutral-400">
-              You do not have any completed projects yet. Complete all tasks or
-              mark your project status as &ldquo;Completed&rdquo; to submit!
+              {isAdmin
+                ? "No completed projects currently found across squads. Projects must have all tasks completed and status set to 'Completed' before they can be featured on the Leaderboard."
+                : "You do not have any completed projects yet. Complete all tasks and set your project status to “Completed” to submit!"}
             </div>
           ) : (
             <div className="space-y-3">
@@ -979,6 +1042,10 @@ export default function Leaderboard() {
                     (isValidHttpUrl(p.pptUrl) && isValidHttpUrl(p.demoUrl)),
                 );
                 const isPublished = Boolean(p.isOnLeaderboard);
+                const isVisible = Boolean(
+                  p.isPubliclyVisible ??
+                    (isPublished && isDeliverablesReady && String(p.status || "").toLowerCase() === "completed" && Number(p.pendingTasks || 0) === 0),
+                );
                 const busy = submittingId === p.id;
 
                 return (
@@ -999,22 +1066,26 @@ export default function Leaderboard() {
                               className="fill-amber-400 text-amber-500"
                             />
                             <span>
-                              On Leaderboard ({p.starCount || 0})
+                              On Leaderboard ({p.starCount || 0}){!isVisible ? " · Hidden" : ""}
                             </span>
                           </NeutralBadge>
                         ) : isDeliverablesReady ? (
-                          <NeutralBadge>Eligible to Submit</NeutralBadge>
+                          <NeutralBadge>{isAdmin ? "Eligible to Feature" : "Eligible to Submit"}</NeutralBadge>
                         ) : (
                           <NeutralBadge>Missing PPT / Demo Link</NeutralBadge>
                         )}
                       </div>
                       <p className="mt-1 line-clamp-1 text-xs text-neutral-500 dark:text-neutral-400">
-                        {p.description || "100% Completed Project"}
+                        {p.ownerName ? `Lead: ${p.ownerName}` : p.description || "100% Completed Project"}
                       </p>
-                      {!isDeliverablesReady && (
+                      {isPublished && !isVisible && (
+                        <p className="mt-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                          Temporarily hidden from public leaderboard until status is 'Completed' and all tasks are finished. Stars are preserved!
+                        </p>
+                      )}
+                      {!isPublished && !isDeliverablesReady && (
                         <p className="mt-1 text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
-                          Requires both valid PPT &amp; Live Demo links to
-                          submit.
+                          Requires both valid PPT &amp; Live Demo links to {isAdmin ? "feature." : "submit."}
                         </p>
                       )}
                     </div>
@@ -1027,7 +1098,7 @@ export default function Leaderboard() {
                           onClick={() => handleWithdrawProject(p.id)}
                           className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white`}
                         >
-                          <span>{busy ? "Working..." : "Withdraw"}</span>
+                          <span>{busy ? "Working..." : isAdmin ? "Remove from Leaderboard" : "Withdraw"}</span>
                         </button>
                       ) : isDeliverablesReady ? (
                         <button
@@ -1038,7 +1109,7 @@ export default function Leaderboard() {
                         >
                           <Sparkles size={14} strokeWidth={1.85} />
                           <span>
-                            {busy ? "Publishing..." : "Publish to Leaderboard"}
+                            {busy ? "Working..." : isAdmin ? "Feature on Leaderboard" : "Publish to Leaderboard"}
                           </span>
                         </button>
                       ) : (

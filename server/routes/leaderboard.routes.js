@@ -1,5 +1,6 @@
 import express from "express";
 import protect from "../middleware/auth.middleware.js";
+import { requireProjectLeader } from "../middleware/ownershipGuard.js";
 import {
     getLeaderboard,
     toggleProjectStar,
@@ -18,7 +19,7 @@ router.get("/", getLeaderboard);
 router.get("/my-eligible", getMyEligibleProjects);
 router.get("/projects/:id/stars", getProjectStarsBreakdown);
 router.post("/projects/:id/star", toggleProjectStar);
-router.post("/projects/:id/submit", submitToLeaderboard);
-router.delete("/projects/:id/submit", withdrawFromLeaderboard);
+router.post("/projects/:id/submit", requireProjectLeader("id"), submitToLeaderboard);
+router.delete("/projects/:id/submit", requireProjectLeader("id"), withdrawFromLeaderboard);
 
 export default router;

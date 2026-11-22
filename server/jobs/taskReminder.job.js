@@ -2,6 +2,7 @@ import cron from "node-cron";
 import pool from "../config/db.js";
 
 let isRunning = false;
+let scheduledTask = null;
 
 export const checkTaskReminders = async (io) => {
     if (isRunning) return;
@@ -62,8 +63,11 @@ export const checkTaskReminders = async (io) => {
 };
 
 export const startTaskReminderJob = (io) => {
+    if (scheduledTask) return scheduledTask;
+
     // Run every hour
-    cron.schedule("0 * * * *", () => {
+    scheduledTask = cron.schedule("0 * * * *", () => {
         checkTaskReminders(io);
     });
+    return scheduledTask;
 };

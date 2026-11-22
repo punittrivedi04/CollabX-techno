@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pool from "../config/db.js";
 import { safeUser, parsePositiveInt, pickAllowedFields } from "../utils/formatters.js";
-import { sendOtpEmail } from "../utils/sendEmail.js";
+import { sendOtpEmail, sendWelcomeEmail } from "../utils/sendEmail.js";
 import {
     MicroCache,
     invalidateUserCache,
@@ -109,6 +109,17 @@ export const loginUser = async (req, res, next) => {
         }
 
         const user = rows[0];
+
+        // Ensure verified @technonjr.org accounts are auto-approved and bypass the approval queue
+        const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
+        if (isTechnoNjr && user.is_verified && (user.is_active === false || user.role_classified === false)) {
+            await pool.query(
+                "UPDATE users SET is_active = TRUE, role_classified = TRUE WHERE id = $1;",
+                [user.id]
+            );
+            user.is_active = true;
+            user.role_classified = true;
+        }
 
         if (user.is_active === false && user.role_classified === false) {
             return res.status(403).json({
@@ -278,7 +289,11 @@ export const registerUser = async (req, res, next) => {
             }
         }
 
+        // Check email domain for Techno NJR institutional auto-approval
+        const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
         let isNewPendingSignup = false;
+        let createdUserId = null;
+
         if (existingCheck.rows.length > 0) {
             const existingUser = existingCheck.rows[0];
             if (existingUser.is_verified) {
@@ -289,60 +304,96 @@ export const registerUser = async (req, res, next) => {
                 });
             }
 
-            // Update unverified user with new credentials (stays pending Admin approval & classification)
-            await pool.query(`
+            // Update unverified user credentials
+            // @technonjr.org accounts are auto-approved (is_active=TRUE, role_classified=TRUE)
+            // Non-technonjr accounts stay pending Admin approval & role classification
+            const updateRes = await pool.query(`
                 UPDATE users
                 SET name = $1,
                     password_hash = $2,
                     roll_no = COALESCE($3, roll_no),
-                    is_active = FALSE,
-                    role_classified = FALSE
-                WHERE id = $4;
-            `, [cleanName, passwordHash, cleanRollNo, existingUser.id]);
+                    is_active = $4,
+                    role_classified = $5
+                WHERE id = $6
+                RETURNING id;
+            `, [cleanName, passwordHash, cleanRollNo, isTechnoNjr, isTechnoNjr, existingUser.id]);
+            createdUserId = updateRes.rows[0]?.id || existingUser.id;
         } else {
-            // Create new self-registered user awaiting Admin approval & role classification
-            await pool.query(`
+            // Create new user: @technonjr.org accounts bypass approval queue directly with Student role
+            const insertRes = await pool.query(`
                 INSERT INTO users (name, email, password_hash, roll_no, role, is_verified, is_active, role_classified, created_at)
-                VALUES ($1, $2, $3, $4, 'student', FALSE, FALSE, FALSE, NOW());
-            `, [cleanName, cleanEmail, passwordHash, cleanRollNo]);
+                VALUES ($1, $2, $3, $4, 'student', FALSE, $5, $6, NOW())
+                RETURNING id;
+            `, [cleanName, cleanEmail, passwordHash, cleanRollNo, isTechnoNjr, isTechnoNjr]);
             isNewPendingSignup = true;
+            createdUserId = insertRes.rows[0]?.id;
         }
 
-        // Notify Admin users (excluding Director) about the new signup awaiting approval at /admin/roles
-        if (isNewPendingSignup) {
-            try {
-                const adminRes = await pool.query(`
-                    SELECT id
-                    FROM users
-                    WHERE LOWER(role) IN ('admin', 'coordinator')
-                      AND is_active = TRUE;
-                `);
-                const io = req.app.get("io");
-                const notifTitle = "New Account Awaiting Approval";
-                const notifMsg = `${cleanName} (${cleanEmail}) registered and is awaiting Admin approval and role classification. Review at /admin/roles`;
-                for (const admin of adminRes.rows) {
-                    const ins = await pool.query(
-                        `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                         VALUES ($1, $2, $3, 'role_approval', FALSE, NOW())
-                         RETURNING id, title, message, type, is_read, created_at;`,
-                        [admin.id, notifTitle, notifMsg]
-                    );
-                    if (io && ins.rows[0]) {
-                        io.to(`user:${admin.id}`).emit("notification:new", {
-                            id: ins.rows[0].id,
-                            _id: ins.rows[0].id,
-                            title: ins.rows[0].title,
-                            message: ins.rows[0].message,
-                            type: ins.rows[0].type,
-                            link: "/admin/roles",
-                            isRead: false,
-                            createdAt: ins.rows[0].created_at,
-                        });
-                    }
+        // Send notifications (Admin notification + User welcome notification)
+        try {
+            const adminRes = await pool.query(`
+                SELECT id
+                FROM users
+                WHERE LOWER(role) IN ('admin', 'coordinator')
+                  AND is_active = TRUE;
+            `);
+            const io = req.app.get("io");
+
+            const adminNotifTitle = isTechnoNjr
+                ? "New @technonjr.org Account Created"
+                : "New Account Awaiting Approval";
+            const adminNotifMsg = isTechnoNjr
+                ? `${cleanName} (${cleanEmail}${cleanRollNo ? ` · Roll: ${cleanRollNo}` : ""}) registered an institutional account with Student access.`
+                : `${cleanName} (${cleanEmail}) registered and is awaiting Admin approval and role classification. Review at /admin/roles`;
+            const adminNotifType = isTechnoNjr ? "account_created" : "role_approval";
+            const adminNotifLink = isTechnoNjr ? "/admin/students" : "/admin/roles";
+
+            for (const admin of adminRes.rows) {
+                const ins = await pool.query(
+                    `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                     VALUES ($1, $2, $3, $4, FALSE, NOW())
+                     RETURNING id, title, message, type, is_read, created_at;`,
+                    [admin.id, adminNotifTitle, adminNotifMsg, adminNotifType]
+                );
+                if (io && ins.rows[0]) {
+                    io.to(`user:${admin.id}`).emit("notification:new", {
+                        id: ins.rows[0].id,
+                        _id: ins.rows[0].id,
+                        title: ins.rows[0].title,
+                        message: ins.rows[0].message,
+                        type: ins.rows[0].type,
+                        link: adminNotifLink,
+                        isRead: false,
+                        createdAt: ins.rows[0].created_at,
+                    });
                 }
-            } catch (notifErr) {
-                console.warn("[Signup Admin Notification] Failed:", notifErr.message);
             }
+
+            // User-side welcome/account-created notification
+            if (createdUserId) {
+                const userNotifTitle = isTechnoNjr
+                    ? "Welcome to CollabX!"
+                    : "Registration Received";
+                const userNotifMsg = isTechnoNjr
+                    ? `Welcome to CollabX, ${cleanName}! Your @technonjr.org institutional account has been successfully created with Student access.`
+                    : `Hello ${cleanName}, your account has been registered and is pending administrator approval and role classification.`;
+                const userNotifType = isTechnoNjr ? "welcome" : "system";
+
+                await pool.query(
+                    `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                     VALUES ($1, $2, $3, $4, FALSE, NOW());`,
+                    [createdUserId, userNotifTitle, userNotifMsg, userNotifType]
+                );
+            }
+        } catch (notifErr) {
+            console.warn("[Signup Notification] Failed:", notifErr.message);
+        }
+
+        // Non-blocking welcome email delivery for institutional accounts
+        if (isTechnoNjr) {
+            sendWelcomeEmail({ to: cleanEmail, name: cleanName, role: "student" }).catch((emailErr) => {
+                console.warn("[Welcome Email Notice] Non-blocking delivery:", emailErr.message);
+            });
         }
 
         invalidateUserCache();
@@ -469,14 +520,17 @@ export const verifyOtp = async (req, res, next) => {
         consumedOtpTokens.set(tokenAttemptKey, true);
         otpAttemptsCache.delete(tokenAttemptKey);
 
-        // If purpose is signup, mark email verified; keep unapproved accounts blocked until Admin approves & classifies
+        // If purpose is signup, mark email verified; @technonjr.org accounts are auto-activated
         if (decoded.purpose === "signup") {
+            const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
             const updateRes = await pool.query(`
                 UPDATE users
-                SET is_verified = TRUE
+                SET is_verified = TRUE,
+                    is_active = CASE WHEN $2::boolean THEN TRUE ELSE is_active END,
+                    role_classified = CASE WHEN $2::boolean THEN TRUE ELSE role_classified END
                 WHERE LOWER(email) = LOWER($1)
                 RETURNING id, name, email, roll_no, role, phone, mentor_id, role_classified, is_verified, is_active, created_at;
-            `, [cleanEmail]);
+            `, [cleanEmail, isTechnoNjr]);
 
             if (updateRes.rows.length === 0) {
                 return res.status(404).json({

@@ -87,6 +87,40 @@ export default function MentorStudentDetail() {
     recentActivities = [],
   } = data;
 
+  const derivedTotalTasks =
+    typeof taskProgress.total === "number"
+      ? taskProgress.total
+      : typeof taskProgress.totalTasks === "number"
+        ? taskProgress.totalTasks
+        : typeof data.totalTasks === "number"
+          ? data.totalTasks
+          : Array.isArray(tasks)
+            ? tasks.length
+            : 0;
+
+  const derivedCompletedTasks =
+    typeof taskProgress.completed === "number"
+      ? taskProgress.completed
+      : typeof taskProgress.completedTasks === "number"
+        ? taskProgress.completedTasks
+        : typeof data.completedTasks === "number"
+          ? data.completedTasks
+          : Array.isArray(tasks)
+            ? tasks.filter((t) => {
+                const s = String(t.status || "").trim().toLowerCase();
+                return s === "completed" || s === "done";
+              }).length
+            : 0;
+
+  const derivedCompletionRate =
+    typeof taskProgress.completionRate === "number"
+      ? taskProgress.completionRate
+      : typeof data.completionRate === "number"
+        ? data.completionRate
+        : derivedTotalTasks > 0
+          ? Math.round((derivedCompletedTasks / derivedTotalTasks) * 100)
+          : 0;
+
   return (
     <div className="space-y-6 text-neutral-950 dark:text-white">
       <Link
@@ -110,6 +144,14 @@ export default function MentorStudentDetail() {
               <NeutralBadge>
                 {student.is_active ? "Active" : "Inactive"}
               </NeutralBadge>
+              <NeutralBadge>
+                {teams.length} {teams.length === 1 ? "Mentored Team" : "Mentored Teams"}
+              </NeutralBadge>
+              {teams.some((t) => t.isLeader) && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                  Team Leader{teams.filter((t) => t.isLeader).length > 1 ? ` (${teams.filter((t) => t.isLeader).length})` : ""}
+                </span>
+              )}
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-neutral-600 dark:text-neutral-400">
               <span className="inline-flex items-center gap-1.5">
@@ -136,9 +178,9 @@ export default function MentorStudentDetail() {
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
             ["Mentored Teams", teams.length],
-            ["Total Tasks", taskProgress.total ?? 0],
-            ["Completed", taskProgress.completed ?? 0],
-            ["Completion Rate", `${taskProgress.completionRate ?? 0}%`],
+            ["Total Tasks", derivedTotalTasks],
+            ["Completed Tasks", derivedCompletedTasks],
+            ["Completion Rate", `${derivedCompletionRate}%`],
           ].map(([label, val]) => (
             <div
               key={label}
@@ -157,7 +199,7 @@ export default function MentorStudentDetail() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <SectionCard
-          title="Teams & Projects under Your Mentorship"
+          title={`Teams & Projects under Your Mentorship (${teams.length})`}
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           {teams.length === 0 ? (
@@ -175,7 +217,11 @@ export default function MentorStudentDetail() {
                       {t.title}
                     </p>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {t.isLeader && <NeutralBadge>Team Leader</NeutralBadge>}
+                      {t.isLeader && (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                          Team Leader
+                        </span>
+                      )}
                       <NeutralBadge>{resolveProjectStatus(t)}</NeutralBadge>
                     </div>
                   </div>
@@ -196,7 +242,7 @@ export default function MentorStudentDetail() {
         </SectionCard>
 
         <SectionCard
-          title="Assigned Tasks"
+          title={`Assigned Tasks (${derivedTotalTasks})`}
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           {tasks.length === 0 ? (

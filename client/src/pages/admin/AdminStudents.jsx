@@ -7,6 +7,7 @@ import {
   Power,
   RefreshCw,
   Search,
+  Trash2,
   UserCog,
   UserPlus,
 } from "lucide-react";
@@ -45,12 +46,10 @@ function NeutralStatusPill({ label }) {
 export default function AdminStudents() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
-  const [mentors, setMentors] = useState([]);
   const [teams, setTeams] = useState([]);
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [mentorFilter, setMentorFilter] = useState("");
   const [teamFilter, setTeamFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -72,6 +71,10 @@ export default function AdminStudents() {
   // Promote Student -> Mentor confirmation
   const [promoteTarget, setPromoteTarget] = useState(null);
 
+  // Delete Student confirmation
+  const [studentToDelete, setStudentToDelete] = useState(null);
+  const [deletingStudent, setDeletingStudent] = useState(false);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search.trim());
@@ -92,9 +95,9 @@ export default function AdminStudents() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    Promise.all([api.get("/admin/mentors"), api.get("/admin/teams")])
-      .then(([mRes, tRes]) => {
-        setMentors(Array.isArray(mRes.data?.mentors) ? mRes.data.mentors : []);
+    api
+      .get("/admin/teams")
+      .then((tRes) => {
         setTeams(Array.isArray(tRes.data?.teams) ? tRes.data.teams : []);
       })
       .catch(() => {});
@@ -106,12 +109,13 @@ export default function AdminStudents() {
     try {
       const params = { page, limit: 25 };
       if (debouncedSearch) params.search = debouncedSearch;
-      if (mentorFilter) params.mentorId = mentorFilter;
       if (teamFilter) params.teamId = teamFilter;
       if (statusFilter && statusFilter !== "all") params.status = statusFilter;
 
       const res = await api.get("/admin/students", { params });
-      setStudents(Array.isArray(res.data?.students) ? res.data.students : []);
+      const rawStudents = Array.isArray(res.data?.students) ? res.data.students : [];
+      const uniqueStudents = Array.from(new Map(rawStudents.map((s) => [s.id, s])).values());
+      setStudents(uniqueStudents);
       setPagination({
         total: Number(res.data?.pagination?.total) || 0,
         totalPages: Math.max(1, Number(res.data?.pagination?.totalPages) || 1),
@@ -122,7 +126,7 @@ export default function AdminStudents() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, mentorFilter, teamFilter, statusFilter]);
+  }, [page, debouncedSearch, teamFilter, statusFilter]);
 
   useEffect(() => {
     loadStudents();
@@ -219,6 +223,23 @@ export default function AdminStudents() {
     }
   };
 
+  const handleDeleteStudent = async () => {
+    if (deletingStudent || !studentToDelete) return;
+    setDeletingStudent(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/admin/users/${studentToDelete.id}`);
+      setSuccess(`Student account "${studentToDelete.name}" deleted cleanly.`);
+      setStudentToDelete(null);
+      await loadStudents();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete student account."));
+    } finally {
+      setDeletingStudent(false);
+    }
+  };
+
   return (
     <div className="space-y-6 text-neutral-950 dark:text-white">
       {/* Header */}
@@ -264,7 +285,7 @@ export default function AdminStudents() {
       <SuccessAlert message={success} onDismiss={() => setSuccess("")} />
 
       {/* Search & Filters */}
-      <div className="grid gap-3 rounded-2xl border border-black/12 bg-white p-4 shadow-2xs dark:border-white/12 dark:bg-[#08080A] md:grid-cols-4">
+      <div className="grid gap-3 rounded-2xl border border-black/12 bg-white p-4 shadow-2xs dark:border-white/12 dark:bg-[#08080A] md:grid-cols-3">
         <div className="relative">
           <Search
             size={15}
@@ -278,22 +299,6 @@ export default function AdminStudents() {
             className={`${portalInputClass} rounded-xl pl-10 dark:!border-white/12 dark:!bg-[#101014] dark:!text-white dark:placeholder:!text-neutral-500`}
           />
         </div>
-
-        <select
-          value={mentorFilter}
-          onChange={(e) => {
-            setMentorFilter(e.target.value);
-            setPage(1);
-          }}
-          className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
-        >
-          <option value="">All Mentors</option>
-          {mentors.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
 
         <select
           value={teamFilter}
@@ -350,11 +355,10 @@ export default function AdminStudents() {
       ) : (
         <div className="overflow-hidden rounded-2xl border border-black/12 bg-white shadow-2xs dark:border-white/12 dark:bg-[#08080A]">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-left text-xs">
+            <table className="w-full min-w-[760px] text-left text-xs">
               <thead className="border-b border-black/10 bg-neutral-50 text-[11px] font-bold uppercase tracking-wider text-neutral-500 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-400">
                 <tr>
                   <th className="px-5 py-3.5">Student</th>
-                  <th className="px-4 py-3.5">Mentor</th>
                   <th className="px-4 py-3.5">Team / Project</th>
                   <th className="px-4 py-3.5">Task Progress</th>
                   <th className="px-4 py-3.5">Status</th>
@@ -367,6 +371,31 @@ export default function AdminStudents() {
                   const completedTasks = Number(s.taskProgress?.completed) || 0;
                   const totalTasks = Number(s.taskProgress?.total) || 0;
                   const completionRate = Number(s.taskProgress?.completionRate) || 0;
+
+                  const projectCount =
+                    typeof s.projectCount === "number"
+                      ? s.projectCount
+                      : typeof s.teamsCount === "number"
+                        ? s.teamsCount
+                        : Array.isArray(s.teams)
+                          ? s.teams.length
+                          : s.team
+                            ? 1
+                            : 0;
+
+                  const isLeader =
+                    Boolean(s.isLeader) ||
+                    (Array.isArray(s.teams) && s.teams.some((t) => t.isLeader)) ||
+                    Boolean(s.team?.isLeader);
+
+                  const leaderCount =
+                    typeof s.leaderProjectsCount === "number"
+                      ? s.leaderProjectsCount
+                      : Array.isArray(s.teams)
+                        ? s.teams.filter((t) => t.isLeader).length
+                        : isLeader
+                          ? 1
+                          : 0;
 
                   return (
                     <tr
@@ -400,32 +429,21 @@ export default function AdminStudents() {
                       </td>
 
                       <td className="px-4 py-3.5">
-                        {s.mentor ? (
-                          <Link
-                            to={`/admin/mentors/${s.mentor.id}`}
-                            className="font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
-                          >
-                            {s.mentor.name}
-                          </Link>
-                        ) : (
-                          <span className="text-neutral-400 dark:text-neutral-500">
-                            Unassigned
+                        {projectCount === 0 ? (
+                          <span className="font-medium text-neutral-400 dark:text-neutral-500">
+                            0 projects
                           </span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        {s.team ? (
-                          <Link
-                            to={`/admin/teams/${s.team.id}`}
-                            className="font-semibold text-neutral-900 hover:underline dark:text-neutral-100"
-                          >
-                            {s.team.title}
-                          </Link>
                         ) : (
-                          <span className="text-neutral-400 dark:text-neutral-500">
-                            No team
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center rounded-md border border-black/10 bg-neutral-100 px-2.5 py-1 text-[11px] font-bold text-neutral-900 dark:border-white/12 dark:bg-[#101014] dark:text-white">
+                              {projectCount} {projectCount === 1 ? "project" : "projects"}
+                            </span>
+                            {isLeader && (
+                              <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300">
+                                Leader{leaderCount > 1 ? ` (${leaderCount})` : ""}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 
@@ -495,6 +513,15 @@ export default function AdminStudents() {
                             className="cursor-pointer rounded-xl border border-black/12 bg-neutral-50 p-2 text-neutral-700 transition hover:border-black/35 hover:bg-neutral-100 hover:text-neutral-950 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-white/35 dark:hover:text-white"
                           >
                             <Power size={14} strokeWidth={1.85} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStudentToDelete(s)}
+                            title="Delete Student Account"
+                            aria-label={`Delete ${s.name}`}
+                            className="cursor-pointer rounded-xl border border-black/12 bg-neutral-50 p-2 text-neutral-700 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-white/12 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-rose-900/50 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                          >
+                            <Trash2 size={14} strokeWidth={1.85} />
                           </button>
                         </div>
                       </td>
@@ -676,6 +703,22 @@ export default function AdminStudents() {
         message={
           promoteTarget
             ? `Change ${promoteTarget.name} (${promoteTarget.email}) from Student to Faculty Mentor? This marks their account as classified, logs an audit entry, and revokes existing tokens so Mentor permissions apply on next login.`
+            : ""
+        }
+      />
+
+      {/* Delete Student Account Confirmation */}
+      <ConfirmDialog
+        open={Boolean(studentToDelete)}
+        onClose={() => !deletingStudent && setStudentToDelete(null)}
+        onConfirm={handleDeleteStudent}
+        busy={deletingStudent}
+        tone="danger"
+        title="Delete Student Account Permanently"
+        confirmLabel="Delete Account"
+        message={
+          studentToDelete
+            ? `Are you sure you want to permanently delete the account for "${studentToDelete.name}" (${studentToDelete.email})? This safely removes or cleans up their squad memberships, unassigns their tasks, and revokes active access tokens. This action is irreversible.`
             : ""
         }
       />

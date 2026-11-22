@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Activity,
   ArrowLeft,
@@ -10,11 +10,15 @@ import {
   ChevronDown,
   ChevronUp,
   Crown,
+  Edit2,
   ExternalLink,
   FolderKanban,
   Globe,
   MessageSquare,
+  Plus,
   Presentation,
+  Trash2,
+  UserPlus,
   Users,
 } from "lucide-react";
 
@@ -31,6 +35,7 @@ import {
 import EmbeddedProjectChat from "../../components/portal/EmbeddedProjectChat";
 import SearchableSelect from "../../components/portal/SearchableSelect";
 import {
+  ConfirmDialog,
   EmptyState,
   ErrorAlert,
   LoadingState,
@@ -38,6 +43,7 @@ import {
   ProgressBar,
   SectionCard,
   SuccessAlert,
+  portalInputClass,
   portalPrimaryBtnClass,
   portalSecondaryBtnClass,
 } from "../../components/portal/PortalUI";
@@ -87,6 +93,7 @@ export default function AdminTeamDetail() {
     });
   };
 
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [mentors, setMentors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -96,6 +103,43 @@ export default function AdminTeamDetail() {
 
   const [showReassign, setShowReassign] = useState(false);
   const [selectedMentorId, setSelectedMentorId] = useState("");
+
+  // Project Delete state
+  const [showDeleteProject, setShowDeleteProject] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
+
+  // Direct Team Membership state
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [availableStudents, setAvailableStudents] = useState([]);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState(null);
+  const [removingMember, setRemovingMember] = useState(false);
+
+  // Deliverables update state
+  const [showEditDeliverables, setShowEditDeliverables] = useState(false);
+  const [deliverablesForm, setDeliverablesForm] = useState({
+    githubUrl: "",
+    demoUrl: "",
+    pptUrl: "",
+  });
+  const [savingDeliverables, setSavingDeliverables] = useState(false);
+
+  // Task management state
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
+  const [taskForm, setTaskForm] = useState({
+    title: "",
+    description: "",
+    priority: "Normal",
+    status: "Pending",
+    assignedTo: "",
+    dueDate: "",
+  });
+  const [savingTask, setSavingTask] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  const [deletingTask, setDeletingTask] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,6 +191,190 @@ export default function AdminTeamDetail() {
       setError(getErrorMessage(err, "Unable to reassign project mentor."));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (deletingProject) return;
+    setDeletingProject(true);
+    setError("");
+    try {
+      await api.delete(`/projects/${projectId}`);
+      navigate("/admin/teams", { replace: true });
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete project."));
+      setDeletingProject(false);
+      setShowDeleteProject(false);
+    }
+  };
+
+  const handleOpenAddMember = async () => {
+    setShowAddMember(true);
+    setSelectedStudentId("");
+    setLoadingStudents(true);
+    try {
+      const res = await api.get("/admin/students", { params: { limit: 200 } });
+      const list = Array.isArray(res.data?.students) ? res.data.students : [];
+      const enrolledIds = new Set([
+        ...(data?.team?.owner?.id ? [Number(data.team.owner.id)] : []),
+        ...(data?.team?.teamLeader?.id ? [Number(data.team.teamLeader.id)] : []),
+        ...(Array.isArray(data?.team?.members)
+          ? data.team.members.map((m) => Number(m.id))
+          : []),
+      ]);
+      const candidates = list.filter(
+        (s) => !enrolledIds.has(Number(s.id)) && s.is_active !== false,
+      );
+      setAvailableStudents(candidates);
+      if (candidates.length > 0) {
+        setSelectedStudentId(String(candidates[0].id));
+      }
+    } catch {
+      setAvailableStudents([]);
+    } finally {
+      setLoadingStudents(false);
+    }
+  };
+
+  const handleAddMember = async (e) => {
+    e.preventDefault();
+    if (addingMember || !selectedStudentId) return;
+    setAddingMember(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.post(`/admin/teams/${projectId}/members`, {
+        userId: Number(selectedStudentId),
+        role: "member",
+      });
+      setSuccess("Team member added cleanly without invite token.");
+      setShowAddMember(false);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to add member to team."));
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const handleRemoveMember = async () => {
+    if (removingMember || !memberToRemove) return;
+    setRemovingMember(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/admin/teams/${projectId}/members/${memberToRemove.id}`);
+      setSuccess("Team member removed cleanly.");
+      setMemberToRemove(null);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to remove team member."));
+    } finally {
+      setRemovingMember(false);
+    }
+  };
+
+  const handleOpenEditDeliverables = () => {
+    setDeliverablesForm({
+      githubUrl: data?.deliverables?.githubUrl || data?.resources?.githubUrl || "",
+      demoUrl: data?.deliverables?.demoUrl || data?.resources?.demoUrl || "",
+      pptUrl: data?.deliverables?.pptUrl || data?.resources?.pptUrl || "",
+    });
+    setShowEditDeliverables(true);
+  };
+
+  const handleSaveDeliverables = async (e) => {
+    e.preventDefault();
+    if (savingDeliverables) return;
+    setSavingDeliverables(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.put(`/projects/${projectId}`, deliverablesForm);
+      setSuccess("Project deliverable links updated cleanly.");
+      setShowEditDeliverables(false);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to update project deliverables."));
+    } finally {
+      setSavingDeliverables(false);
+    }
+  };
+
+  const handleOpenCreateTask = () => {
+    setEditingTask(null);
+    setTaskForm({
+      title: "",
+      description: "",
+      priority: "Normal",
+      status: "Pending",
+      assignedTo: data?.team?.teamLeader?.id ? String(data.team.teamLeader.id) : "",
+      dueDate: "",
+    });
+    setShowTaskModal(true);
+  };
+
+  const handleOpenEditTask = (t) => {
+    setEditingTask(t);
+    setTaskForm({
+      title: t.title || "",
+      description: t.description || "",
+      priority: t.priority || "Normal",
+      status: t.status || "Pending",
+      assignedTo: t.assignedTo?.id ? String(t.assignedTo.id) : "",
+      dueDate: t.dueDate ? String(t.dueDate).split("T")[0] : "",
+    });
+    setShowTaskModal(true);
+  };
+
+  const handleSaveTask = async (e) => {
+    e.preventDefault();
+    if (savingTask) return;
+    setSavingTask(true);
+    setError("");
+    setSuccess("");
+    try {
+      const payload = {
+        title: taskForm.title.trim(),
+        description: taskForm.description ? taskForm.description.trim() : "",
+        priority: taskForm.priority,
+        status: taskForm.status,
+        assignedTo: taskForm.assignedTo ? Number(taskForm.assignedTo) : null,
+        dueDate: taskForm.dueDate || null,
+      };
+      if (editingTask) {
+        await api.put(`/tasks/${editingTask.id}`, payload);
+        setSuccess("Task updated successfully.");
+      } else {
+        await api.post("/tasks", {
+          ...payload,
+          projectId: Number(projectId),
+        });
+        setSuccess("Task created successfully.");
+      }
+      setShowTaskModal(false);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to save task."));
+    } finally {
+      setSavingTask(false);
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (deletingTask || !taskToDelete) return;
+    setDeletingTask(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/tasks/${taskToDelete.id}`);
+      setSuccess("Task deleted successfully.");
+      setTaskToDelete(null);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete task."));
+    } finally {
+      setDeletingTask(false);
     }
   };
 
@@ -209,10 +437,18 @@ export default function AdminTeamDetail() {
           <button
             type="button"
             onClick={() => setShowReassign(true)}
-            className={`${portalPrimaryBtnClass} cursor-pointer rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+            className={`${portalSecondaryBtnClass} cursor-pointer rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
           >
             <ArrowRightLeft size={14} strokeWidth={1.85} />
             <span>Reassign Mentor</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowDeleteProject(true)}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-900/60"
+          >
+            <Trash2 size={14} strokeWidth={1.85} />
+            <span>Delete Project</span>
           </button>
         </div>
       </div>
@@ -320,6 +556,16 @@ export default function AdminTeamDetail() {
         <SectionCard
           title={`Team Roster (${memberCount})`}
           subtitle="Team Leader and enrolled students"
+          action={
+            <button
+              type="button"
+              onClick={handleOpenAddMember}
+              className={`${portalSecondaryBtnClass} cursor-pointer rounded-xl px-3 py-1.5 text-xs dark:!border-white/15 dark:!bg-[#101014] dark:!text-white dark:hover:!bg-[#18181E]`}
+            >
+              <UserPlus size={13} strokeWidth={1.85} />
+              <span>Add Member</span>
+            </button>
+          }
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           <div className="space-y-2.5">
@@ -365,12 +611,14 @@ export default function AdminTeamDetail() {
             )}
 
             {(team.members || []).map((m) => (
-              <Link
+              <div
                 key={m.id}
-                to={`/admin/students/${m.id}`}
                 className="flex items-center justify-between gap-3 rounded-xl border border-black/10 bg-neutral-50 p-3.5 transition hover:border-black/35 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35"
               >
-                <div className="flex min-w-0 items-center gap-3">
+                <Link
+                  to={`/admin/students/${m.id}`}
+                  className="flex min-w-0 flex-1 items-center gap-3"
+                >
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/12 bg-white text-[11px] font-bold text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
                     {getInitials(m.name)}
                   </div>
@@ -392,11 +640,21 @@ export default function AdminTeamDetail() {
                         : ""}
                     </p>
                   </div>
+                </Link>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md border border-black/10 bg-white px-2 py-0.5 text-[11px] font-semibold capitalize text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
+                    {m.role || "Member"}
+                  </span>
+                  <button
+                    type="button"
+                    title={`Remove ${m.name} from team`}
+                    onClick={() => setMemberToRemove(m)}
+                    className="cursor-pointer rounded-lg border border-transparent p-1 text-neutral-400 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 dark:text-neutral-500 dark:hover:border-rose-900/50 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                  >
+                    <Trash2 size={13} strokeWidth={1.85} />
+                  </button>
                 </div>
-                <span className="rounded-md border border-black/10 bg-white px-2 py-0.5 text-[11px] font-semibold capitalize text-neutral-700 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-300">
-                  {m.role || "Member"}
-                </span>
-              </Link>
+              </div>
             ))}
 
             {!team.teamLeader && (team.members || []).length === 0 && (
@@ -408,6 +666,16 @@ export default function AdminTeamDetail() {
         <SectionCard
           title="Drive Resources & Deliverables"
           subtitle="Project repositories, decks, and demos"
+          action={
+            <button
+              type="button"
+              onClick={handleOpenEditDeliverables}
+              className={`${portalSecondaryBtnClass} cursor-pointer rounded-xl px-3 py-1.5 text-xs dark:!border-white/15 dark:!bg-[#101014] dark:!text-white dark:hover:!bg-[#18181E]`}
+            >
+              <Edit2 size={13} strokeWidth={1.85} />
+              <span>Edit Links</span>
+            </button>
+          }
           className="dark:!border-white/12 dark:!bg-[#08080A]"
         >
           <div className="space-y-3">
@@ -486,6 +754,16 @@ export default function AdminTeamDetail() {
       <SectionCard
         title={`Project Tasks (${tasks.length})`}
         subtitle={`${completedTasksCount} completed · ${pendingTasksCount} pending`}
+        action={
+          <button
+            type="button"
+            onClick={handleOpenCreateTask}
+            className={`${portalSecondaryBtnClass} cursor-pointer rounded-xl px-3 py-1.5 text-xs dark:!border-white/15 dark:!bg-[#101014] dark:!text-white dark:hover:!bg-[#18181E]`}
+          >
+            <Plus size={13} strokeWidth={1.85} />
+            <span>Add Task</span>
+          </button>
+        }
         className="dark:!border-white/12 dark:!bg-[#08080A]"
       >
         {tasks.length === 0 ? (
@@ -503,7 +781,8 @@ export default function AdminTeamDetail() {
                   <th className="px-3 py-2.5">Assignee</th>
                   <th className="px-3 py-2.5">Priority</th>
                   <th className="px-3 py-2.5">Status</th>
-                  <th className="py-2.5 pl-3 text-right">Due Date</th>
+                  <th className="px-3 py-2.5 tabular-nums">Due Date</th>
+                  <th className="py-2.5 pl-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/10 dark:divide-white/10">
@@ -528,8 +807,28 @@ export default function AdminTeamDetail() {
                     <td className="px-3 py-3">
                       <NeutralPill label={t.status || "Pending"} />
                     </td>
-                    <td className="py-3 pl-3 text-right tabular-nums text-neutral-500 dark:text-neutral-400">
+                    <td className="px-3 py-3 tabular-nums text-neutral-500 dark:text-neutral-400">
                       {formatDate(t.dueDate)}
+                    </td>
+                    <td className="py-3 pl-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          title="Edit Task"
+                          onClick={() => handleOpenEditTask(t)}
+                          className="cursor-pointer rounded-lg border border-black/10 bg-white p-1.5 text-neutral-600 transition hover:border-black/30 hover:text-neutral-950 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-300 dark:hover:text-white"
+                        >
+                          <Edit2 size={13} strokeWidth={1.85} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete Task"
+                          onClick={() => setTaskToDelete(t)}
+                          className="cursor-pointer rounded-lg border border-black/10 bg-white p-1.5 text-neutral-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-white/10 dark:bg-[#101014] dark:text-neutral-300 dark:hover:border-rose-900/50 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                        >
+                          <Trash2 size={13} strokeWidth={1.85} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -623,6 +922,329 @@ export default function AdminTeamDetail() {
           </div>
         </form>
       </Modal>
+
+      {/* Delete Project Confirmation */}
+      <ConfirmDialog
+        open={showDeleteProject}
+        title="Delete Project Permanently"
+        message={`Are you sure you want to permanently delete "${team.title}"? All project tasks, member associations, deliverables, and team chat channels will be permanently removed. This action cannot be undone.`}
+        confirmLabel="Delete Project"
+        tone="danger"
+        busy={deletingProject}
+        onConfirm={handleDeleteProject}
+        onClose={() => !deletingProject && setShowDeleteProject(false)}
+      />
+
+      {/* Add Team Member Modal */}
+      <Modal
+        open={showAddMember}
+        onClose={() => !addingMember && setShowAddMember(false)}
+        title="Add Team Member"
+        description={`Enroll an active student directly into "${team.title}" without requiring an invitation link.`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setShowAddMember(false)}
+              disabled={addingMember}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="admin-add-member-form"
+              disabled={addingMember || !selectedStudentId}
+              className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+            >
+              <span>{addingMember ? "Adding..." : "Add to Squad"}</span>
+            </button>
+          </>
+        }
+      >
+        <form
+          id="admin-add-member-form"
+          onSubmit={handleAddMember}
+          className="min-h-[220px] space-y-4"
+        >
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              Select Eligible Student *
+            </label>
+            {loadingStudents ? (
+              <p className="text-xs text-neutral-500">Loading student directory...</p>
+            ) : availableStudents.length === 0 ? (
+              <p className="text-xs text-neutral-500">
+                No unassigned active students available.
+              </p>
+            ) : (
+              <SearchableSelect
+                options={availableStudents.map((s) => ({
+                  value: String(s.id),
+                  label: `${s.name} (${s.email}${s.roll_no ? ` · Roll: ${s.roll_no}` : ""})`,
+                }))}
+                value={selectedStudentId}
+                onChange={setSelectedStudentId}
+                placeholder="Search and select student..."
+                searchPlaceholder="Type name or roll number..."
+              />
+            )}
+          </div>
+        </form>
+      </Modal>
+
+      {/* Remove Team Member Confirmation */}
+      <ConfirmDialog
+        open={Boolean(memberToRemove)}
+        title="Remove Team Member"
+        message={`Are you sure you want to remove ${memberToRemove?.name} from "${team.title}"? Any active tasks assigned to this member will be unassigned.`}
+        confirmLabel="Remove Member"
+        tone="danger"
+        busy={removingMember}
+        onConfirm={handleRemoveMember}
+        onClose={() => !removingMember && setMemberToRemove(null)}
+      />
+
+      {/* Edit Deliverables Modal */}
+      <Modal
+        open={showEditDeliverables}
+        onClose={() => !savingDeliverables && setShowEditDeliverables(false)}
+        title="Edit Deliverables & Resources"
+        description={`Update official GitHub repository, live demo URL, and presentation deck for "${team.title}".`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setShowEditDeliverables(false)}
+              disabled={savingDeliverables}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="admin-deliverables-form"
+              disabled={savingDeliverables}
+              className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+            >
+              <span>{savingDeliverables ? "Saving..." : "Save Deliverables"}</span>
+            </button>
+          </>
+        }
+      >
+        <form
+          id="admin-deliverables-form"
+          onSubmit={handleSaveDeliverables}
+          className="space-y-4"
+        >
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              GitHub Repository URL
+            </label>
+            <input
+              type="url"
+              value={deliverablesForm.githubUrl}
+              onChange={(e) =>
+                setDeliverablesForm({
+                  ...deliverablesForm,
+                  githubUrl: e.target.value,
+                })
+              }
+              placeholder="https://github.com/organization/repo"
+              className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              Live Demo / Drive Folder URL
+            </label>
+            <input
+              type="url"
+              value={deliverablesForm.demoUrl}
+              onChange={(e) =>
+                setDeliverablesForm({
+                  ...deliverablesForm,
+                  demoUrl: e.target.value,
+                })
+              }
+              placeholder="https://collabx-demo.vercel.app or Google Drive"
+              className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              Presentation / PPT URL
+            </label>
+            <input
+              type="url"
+              value={deliverablesForm.pptUrl}
+              onChange={(e) =>
+                setDeliverablesForm({
+                  ...deliverablesForm,
+                  pptUrl: e.target.value,
+                })
+              }
+              placeholder="https://docs.google.com/presentation/..."
+              className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+            />
+          </div>
+        </form>
+      </Modal>
+
+      {/* Add / Edit Task Modal */}
+      <Modal
+        open={showTaskModal}
+        onClose={() => !savingTask && setShowTaskModal(false)}
+        title={editingTask ? "Edit Project Task" : "Add Project Task"}
+        description={`Manage task details, assignee, and milestones for "${team.title}".`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setShowTaskModal(false)}
+              disabled={savingTask}
+              className={`${portalSecondaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="admin-task-form"
+              disabled={savingTask || !taskForm.title.trim()}
+              className={`${portalPrimaryBtnClass} rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200`}
+            >
+              <span>
+                {savingTask
+                  ? "Saving..."
+                  : editingTask
+                    ? "Update Task"
+                    : "Create Task"}
+              </span>
+            </button>
+          </>
+        }
+      >
+        <form
+          id="admin-task-form"
+          onSubmit={handleSaveTask}
+          className="space-y-4"
+        >
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              Task Title *
+            </label>
+            <input
+              required
+              value={taskForm.title}
+              onChange={(e) =>
+                setTaskForm({ ...taskForm, title: e.target.value })
+              }
+              placeholder="e.g., Implement secure token auth"
+              className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+              Description
+            </label>
+            <textarea
+              rows={3}
+              value={taskForm.description}
+              onChange={(e) =>
+                setTaskForm({ ...taskForm, description: e.target.value })
+              }
+              placeholder="Task details and acceptance criteria..."
+              className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                Priority
+              </label>
+              <select
+                value={taskForm.priority}
+                onChange={(e) =>
+                  setTaskForm({ ...taskForm, priority: e.target.value })
+                }
+                className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+              >
+                <option value="Low">Low</option>
+                <option value="Normal">Normal</option>
+                <option value="High">High</option>
+                <option value="Urgent">Urgent</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                Status
+              </label>
+              <select
+                value={taskForm.status}
+                onChange={(e) =>
+                  setTaskForm({ ...taskForm, status: e.target.value })
+                }
+                className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+              >
+                <option value="Pending">Pending</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Completed">Completed</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                Assignee
+              </label>
+              <select
+                value={taskForm.assignedTo}
+                onChange={(e) =>
+                  setTaskForm({ ...taskForm, assignedTo: e.target.value })
+                }
+                className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+              >
+                <option value="">Unassigned</option>
+                {team.teamLeader && (
+                  <option value={String(team.teamLeader.id)}>
+                    {team.teamLeader.name} (Leader)
+                  </option>
+                )}
+                {(team.members || []).map((m) => (
+                  <option key={m.id} value={String(m.id)}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">
+                Due Date
+              </label>
+              <input
+                type="date"
+                value={taskForm.dueDate}
+                onChange={(e) =>
+                  setTaskForm({ ...taskForm, dueDate: e.target.value })
+                }
+                className={`${portalInputClass} rounded-xl dark:!border-white/12 dark:!bg-[#101014] dark:!text-white`}
+              />
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete Task Confirmation */}
+      <ConfirmDialog
+        open={Boolean(taskToDelete)}
+        title="Delete Task"
+        message={`Are you sure you want to permanently delete task "${taskToDelete?.title}"? This cannot be undone.`}
+        confirmLabel="Delete Task"
+        tone="danger"
+        busy={deletingTask}
+        onConfirm={handleDeleteTask}
+        onClose={() => !deletingTask && setTaskToDelete(null)}
+      />
     </div>
   );
 }

@@ -231,14 +231,20 @@ export function StatusBadge({ status, className = "" }) {
   );
 }
 
-export function ProgressBar({ value = 0, showLabel = false, height = "h-2" }) {
+export function ProgressBar({
+  value = 0,
+  showLabel = false,
+  height = "h-2",
+  color,
+}) {
   const clamped = Math.min(100, Math.max(0, Number(value) || 0));
   const barColor =
-    clamped >= 100
-      ? "bg-emerald-500"
-      : clamped >= 50
-        ? "bg-[#15803D] dark:bg-[#22C55E]"
-        : "bg-amber-500";
+    color ||
+    (clamped >= 70
+      ? "bg-emerald-500 dark:bg-emerald-400"
+      : clamped >= 30
+        ? "bg-amber-500 dark:bg-amber-400"
+        : "bg-rose-500 dark:bg-rose-400");
 
   return (
     <div className="flex items-center gap-2.5">

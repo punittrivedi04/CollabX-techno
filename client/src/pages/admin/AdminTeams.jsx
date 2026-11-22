@@ -30,8 +30,15 @@ import {
 } from "../../components/portal/PortalUI";
 
 function NeutralStatusBadge({ label }) {
+  const isArchived = String(label).toLowerCase() === "archived";
   return (
-    <span className="inline-flex shrink-0 items-center rounded-md border border-black/12 bg-white px-2 py-0.5 text-[10px] font-bold text-neutral-800 dark:border-white/14 dark:bg-[#08080A] dark:text-neutral-200">
+    <span
+      className={`inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-[10px] font-bold ${
+        isArchived
+          ? "border-neutral-300 bg-neutral-100 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+          : "border-black/12 bg-white text-neutral-800 dark:border-white/14 dark:bg-[#08080A] dark:text-neutral-200"
+      }`}
+    >
       {label}
     </span>
   );
@@ -166,6 +173,7 @@ export default function AdminTeams() {
           <option value="In Progress">In Progress</option>
           <option value="On Hold">On Hold</option>
           <option value="Completed">Completed</option>
+          <option value="Archived">Archived</option>
         </select>
       </div>
 

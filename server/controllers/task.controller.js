@@ -1,11 +1,64 @@
 import pool from "../config/db.js";
-import { formatTask, parsePositiveInt, pickAllowedFields } from "../utils/formatters.js";
+import { formatTask, parsePositiveInt, pickAllowedFields, isPresentHttpUrl } from "../utils/formatters.js";
 import { readCache, invalidateAllCaches } from "../utils/microCache.js";
+import { isDirector } from "../middleware/directorGuard.js";
 
 const VALID_STATUSES = ["Todo", "In Progress", "In Review", "Completed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High"];
 const MAX_TITLE_LEN = 150;
 const MAX_DESC_LEN = 2000;
+
+export const syncLeaderboardOnTaskChange = async (projectId, io) => {
+    try {
+        if (!projectId) return;
+        const { rows } = await pool.query(
+            `SELECT p.id, p.title, p.status, p.is_on_leaderboard, p.ppt_url, p.demo_url,
+                    (SELECT COUNT(*)::int FROM tasks WHERE project_id = p.id) AS total_tasks,
+                    (SELECT COUNT(*)::int FROM tasks WHERE project_id = p.id AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('completed', 'done')) AS pending_tasks
+             FROM projects p
+             WHERE p.id = $1;`,
+            [projectId]
+        );
+        if (rows.length === 0) return;
+        const proj = rows[0];
+
+        // Only manage visibility if the project was submitted to the leaderboard
+        if (!proj.is_on_leaderboard) return;
+
+        const isCompletedStatus = String(proj.status || "").trim().toLowerCase() === "completed";
+        const hasTasks = Number(proj.total_tasks || 0) >= 1;
+        const noPending = Number(proj.pending_tasks || 0) === 0;
+        const hasDeliverables = isPresentHttpUrl(proj.ppt_url) && isPresentHttpUrl(proj.demo_url);
+
+        const qualifies = isCompletedStatus && hasTasks && noPending && hasDeliverables;
+
+        // Invalidate microCache so getLeaderboard reflects current qualification
+        invalidateAllCaches();
+
+        // When a project already on the leaderboard has incomplete tasks or non-Completed status,
+        // it is temporarily hidden from the public leaderboard. Its project_stars and is_on_leaderboard
+        // flag are strictly preserved so it automatically re-shows with all stars once completed.
+        if (io) {
+            if (!qualifies) {
+                // Temporarily hide from public leaderboard clients
+                io.emit("leaderboard:project_withdrawn", { projectId });
+            } else {
+                // Re-qualify and make visible again with existing stars
+                io.emit("leaderboard:new_project", { projectId, title: proj.title });
+                const { rows: starRows } = await pool.query(
+                    "SELECT COUNT(*)::int AS count FROM project_stars WHERE project_id = $1;",
+                    [projectId]
+                );
+                io.emit("leaderboard:star_update", {
+                    projectId,
+                    starCount: Number(starRows[0]?.count || 0),
+                });
+            }
+        }
+    } catch (err) {
+        console.error("syncLeaderboardOnTaskChange error:", err);
+    }
+};
 
 const hasTaskAccess = async (task, user) => {
     const userId = Number(user.id);
@@ -132,11 +185,17 @@ export const createTask = async (req, res, next) => {
 
         const userId = req.user.id;
         const role = String(req.user.role || "").toLowerCase();
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Task operations are not permitted.",
+            });
+        }
         const isAdmin = role === "admin" || role === "coordinator";
 
         // Check project access
         const projRes = await pool.query(
-            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1",
+            "SELECT id, title, owner_id, mentor_id, status FROM projects WHERE id = $1",
             [projId]
         );
         if (projRes.rows.length === 0) {
@@ -147,6 +206,12 @@ export const createTask = async (req, res, next) => {
         }
 
         const project = projRes.rows[0];
+        if (!isAdmin && project.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
+        }
         const isOwner = Number(project.owner_id) === Number(userId);
         const isMentor = Number(project.mentor_id) === Number(userId);
 
@@ -222,6 +287,7 @@ export const createTask = async (req, res, next) => {
 
         const task = insertRes.rows[0];
         invalidateAllCaches();
+        await syncLeaderboardOnTaskChange(projId, req.app.get("io"));
 
         // Fetch user info for response
         let assigneeObj = null;
@@ -253,6 +319,8 @@ export const getTasks = async (req, res, next) => {
         const userId = req.user.id;
         const role = String(req.user.role || "student").toLowerCase().trim();
         const isAdmin = role === "admin" || role === "coordinator";
+        const isDirectorUser = role === "director" || isDirector(req.user);
+        const hasArchivedOversight = isAdmin || isDirectorUser;
         const { projectId, status } = req.query;
 
         let parsedProjectId = null;
@@ -271,7 +339,7 @@ export const getTasks = async (req, res, next) => {
 
         const formattedTasks = await readCache.getOrSet(cacheKey, async () => {
             let query = `
-                SELECT t.*, p.title as project_title,
+                SELECT t.*, p.title as project_title, p.owner_id as project_owner_id, p.mentor_id as project_mentor_id,
                        u_assignee.name as assignee_name, u_assignee.email as assignee_email,
                        u_creator.name as creator_name, u_creator.email as creator_email
                 FROM tasks t
@@ -286,8 +354,9 @@ export const getTasks = async (req, res, next) => {
                     p.mentor_id = $2 OR
                     p.id IN (SELECT project_id FROM project_members WHERE user_id = $2)
                 )
+                AND ($1::boolean = TRUE OR p.status != 'Archived' OR p.status IS NULL)
             `;
-            const params = [isAdmin, userId];
+            const params = [hasArchivedOversight, userId];
             let paramIdx = 3;
 
             if (parsedProjectId) {
@@ -417,6 +486,44 @@ export const updateTask = async (req, res, next) => {
             "dueDate",
         ]);
 
+        // Leader / Mentor / Admin authorization for editing task details
+        const userId = Number(req.user.id);
+        const role = String(req.user.role || "").toLowerCase();
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Task modifications are not permitted.",
+            });
+        }
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isOwner = Number(existingTask.project_owner_id) === userId;
+        const isMentor = Number(existingTask.project_mentor_id) === userId;
+
+        let isLeader = isOwner;
+        if (!isLeader && !isAdmin && !isMentor) {
+            const leaderCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 AND LOWER(role) = 'leader';",
+                [existingTask.project_id, userId]
+            );
+            isLeader = leaderCheck.rows.length > 0;
+        }
+
+        const isEditingDetails =
+            title !== undefined ||
+            description !== undefined ||
+            priority !== undefined ||
+            assignedTo !== undefined ||
+            dueDate !== undefined;
+
+        // Regular project members are permitted to update task status in their squad,
+        // while editing full metadata (title, description, priority, assignee, due date) requires Leader, Mentor, or Admin
+        if (isEditingDetails && !isAdmin && !isLeader && !isMentor) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden. Only the Team Leader, Assigned Mentor, or Administrator can edit task details.",
+            });
+        }
+
         let newTitle = existingTask.title;
         if (title !== undefined) {
             if (typeof title !== "string" || !title.trim()) {
@@ -518,6 +625,7 @@ export const updateTask = async (req, res, next) => {
 
         const updated = updateRes.rows[0];
         invalidateAllCaches();
+        await syncLeaderboardOnTaskChange(updated.project_id, req.app.get("io"));
 
         // Fetch join info
         const joinRes = await pool.query(`
@@ -575,8 +683,38 @@ export const deleteTask = async (req, res, next) => {
             });
         }
 
+        const userId = Number(req.user.id);
+        const role = String(req.user.role || "").toLowerCase();
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Task deletions are not permitted.",
+            });
+        }
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isOwner = Number(existingTask.project_owner_id) === userId;
+        const isMentor = Number(existingTask.project_mentor_id) === userId;
+
+        let isLeader = isOwner;
+        if (!isLeader && !isAdmin && !isMentor) {
+            const leaderCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 AND LOWER(role) = 'leader';",
+                [existingTask.project_id, userId]
+            );
+            isLeader = leaderCheck.rows.length > 0;
+        }
+
+        if (!isAdmin && !isLeader && !isMentor) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden. Only the Team Leader, Assigned Mentor, or Administrator can delete this task.",
+            });
+        }
+
+        const affectedProjectId = existingTask.project_id;
         await pool.query("DELETE FROM tasks WHERE id = $1", [taskId]);
         invalidateAllCaches();
+        await syncLeaderboardOnTaskChange(affectedProjectId, req.app.get("io"));
 
         return res.status(200).json({
             success: true,

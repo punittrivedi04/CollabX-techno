@@ -58,7 +58,10 @@ export const getLeaderboard = async (req, res, next) => {
                     LEFT JOIN users o ON o.id = p.owner_id
                     LEFT JOIN users m ON m.id = p.mentor_id
                     WHERE p.is_on_leaderboard = TRUE
-                      AND (LOWER(p.status) = 'completed' OR p.progress = 100)
+                      AND LOWER(TRIM(COALESCE(p.status, ''))) = 'completed'
+                      AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                      AND (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) >= 1
+                      AND (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')) = 0
                       AND p.ppt_url IS NOT NULL AND TRIM(p.ppt_url) != '' AND p.ppt_url ~* '^https?://'
                       AND p.demo_url IS NOT NULL AND TRIM(p.demo_url) != '' AND p.demo_url ~* '^https?://'
                 )
@@ -186,6 +189,10 @@ export const toggleProjectStar = async (req, res, next) => {
 
         const project = projRows[0];
 
+        if (project.status === "Archived") {
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
         if (!project.is_on_leaderboard) {
             return res.status(400).json({
                 success: false,
@@ -193,10 +200,26 @@ export const toggleProjectStar = async (req, res, next) => {
             });
         }
 
-        if (String(project.status).toLowerCase() !== "completed" && Number(project.progress) !== 100) {
+        if (String(project.status || "").trim().toLowerCase() !== "completed") {
             return res.status(400).json({
                 success: false,
-                message: "Only 100% completed projects can receive Leaderboard stars",
+                message: "Only projects with 'Completed' status can receive Leaderboard stars",
+            });
+        }
+
+        const { rows: taskCounts } = await pool.query(
+            `SELECT COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status, ''))) NOT IN ('completed', 'done'))::int AS pending
+             FROM tasks WHERE project_id = $1;`,
+            [projectId]
+        );
+        const totalTasks = Number(taskCounts[0]?.total || 0);
+        const pendingTasks = Number(taskCounts[0]?.pending || 0);
+
+        if (totalTasks === 0 || pendingTasks > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Only completed projects with all tasks finished can receive Leaderboard stars",
             });
         }
 
@@ -288,6 +311,13 @@ export const submitToLeaderboard = async (req, res, next) => {
 
         const project = projRows[0];
 
+        if (project.status === "Archived") {
+            return res.status(400).json({
+                success: false,
+                message: "Archived projects cannot be submitted to the Leaderboard.",
+            });
+        }
+
         // Only Project Leader or Admin can submit
         if (!isAdmin && Number(project.owner_id) !== Number(userId)) {
             return res.status(403).json({
@@ -296,12 +326,34 @@ export const submitToLeaderboard = async (req, res, next) => {
             });
         }
 
-        // Must be 100% completed
-        const isCompleted = String(project.status).toLowerCase() === "completed" || Number(project.progress) === 100;
-        if (!isCompleted) {
+        // Must be strictly status === 'completed' and have all tasks completed
+        if (String(project.status || "").trim().toLowerCase() !== "completed") {
             return res.status(400).json({
                 success: false,
-                message: "Project must be 100% completed before submitting to the College Leaderboard.",
+                message: "Project status must be explicitly set to 'Completed' before submitting to the College Leaderboard.",
+            });
+        }
+
+        const taskCheckRes = await pool.query(
+            `SELECT COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status, ''))) NOT IN ('completed', 'done'))::int AS pending
+             FROM tasks WHERE project_id = $1;`,
+            [projectId]
+        );
+        const totalTasks = Number(taskCheckRes.rows[0]?.total || 0);
+        const pendingTasks = Number(taskCheckRes.rows[0]?.pending || 0);
+
+        if (totalTasks === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Project must have at least one task before submitting to the College Leaderboard.",
+            });
+        }
+
+        if (pendingTasks > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot submit to Leaderboard: ${pendingTasks} task(s) are still pending. All tasks must be completed.`,
             });
         }
 
@@ -322,6 +374,9 @@ export const submitToLeaderboard = async (req, res, next) => {
                 project,
             });
         }
+
+        // Clean any historical stars so re-submission / fresh publication starts with 0 stars
+        await pool.query("DELETE FROM project_stars WHERE project_id = $1;", [projectId]);
 
         // Publish to leaderboard
         const { rows: updatedRows } = await pool.query(
@@ -362,6 +417,10 @@ export const submitToLeaderboard = async (req, res, next) => {
                 projectId,
                 title: project.title,
                 leaderboardSubmittedAt: updated.leaderboard_submitted_at,
+            });
+            io.emit("leaderboard:star_update", {
+                projectId,
+                starCount: 0,
             });
         }
 
@@ -417,9 +476,14 @@ export const withdrawFromLeaderboard = async (req, res, next) => {
             });
         }
 
+        // 1. Delete all star votes so re-submitting starts fresh with 0 stars
+        await pool.query("DELETE FROM project_stars WHERE project_id = $1;", [projectId]);
+
+        // 2. Unlist project and clear leaderboard submission timestamp
         await pool.query(
             `UPDATE projects
              SET is_on_leaderboard = FALSE,
+                 leaderboard_submitted_at = NULL,
                  updated_at = NOW()
              WHERE id = $1;`,
             [projectId]
@@ -430,6 +494,7 @@ export const withdrawFromLeaderboard = async (req, res, next) => {
         const io = req.app.get("io");
         if (io) {
             io.emit("leaderboard:project_withdrawn", { projectId });
+            io.emit("leaderboard:star_update", { projectId, starCount: 0 });
         }
 
         await logActivity({
@@ -457,17 +522,36 @@ export const withdrawFromLeaderboard = async (req, res, next) => {
 export const getMyEligibleProjects = async (req, res, next) => {
     try {
         const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
 
-        const { rows: projects } = await pool.query(
-            `SELECT p.id, p.title, p.description, p.status, p.progress,
-                    p.ppt_url, p.demo_url, p.is_on_leaderboard, p.leaderboard_submitted_at,
-                    (SELECT COUNT(*)::int FROM project_stars ps WHERE ps.project_id = p.id) AS star_count
-             FROM projects p
-             WHERE p.owner_id = $1
-               AND (LOWER(p.status) = 'completed' OR p.progress = 100)
-             ORDER BY p.updated_at DESC;`,
-            [userId]
-        );
+        let query = `
+            SELECT p.id, p.title, p.description, p.status, p.progress,
+                   p.ppt_url, p.demo_url, p.is_on_leaderboard, p.leaderboard_submitted_at,
+                   p.owner_id, u.name AS owner_name, u.email AS owner_email,
+                   (SELECT COUNT(*)::int FROM project_stars ps WHERE ps.project_id = p.id) AS star_count,
+                   (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
+                   (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')) AS pending_tasks
+            FROM projects p
+            LEFT JOIN users u ON u.id = p.owner_id
+            WHERE (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+              AND (
+                  p.is_on_leaderboard = TRUE
+                  OR (
+                      LOWER(TRIM(COALESCE(p.status, ''))) = 'completed'
+                      AND (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id) >= 1
+                      AND (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')) = 0
+                  )
+              )
+        `;
+        const params = [];
+        if (!isAdmin) {
+            query += " AND p.owner_id = $1";
+            params.push(userId);
+        }
+        query += " ORDER BY p.updated_at DESC;";
+
+        const { rows: projects } = await pool.query(query, params);
 
         return res.status(200).json({
             success: true,
@@ -476,6 +560,10 @@ export const getMyEligibleProjects = async (req, res, next) => {
                 const hasValidPpt = isPresentHttpUrl(p.ppt_url);
                 const hasValidDemo = isPresentHttpUrl(p.demo_url);
                 const hasValidDeliverables = hasValidPpt && hasValidDemo;
+                const isAllTasksCompleted = Number(p.total_tasks || 0) >= 1 && Number(p.pending_tasks || 0) === 0;
+                const isCompletedStatus = String(p.status || "").trim().toLowerCase() === "completed";
+                const isFullyQualified = isCompletedStatus && isAllTasksCompleted && hasValidDeliverables;
+
                 return {
                     id: p.id,
                     _id: p.id,
@@ -488,8 +576,15 @@ export const getMyEligibleProjects = async (req, res, next) => {
                     hasValidPpt,
                     hasValidDemo,
                     hasValidDeliverables,
-                    isOnLeaderboard: Boolean(p.is_on_leaderboard && hasValidDeliverables),
+                    isOnLeaderboard: Boolean(p.is_on_leaderboard),
+                    isFullyQualified,
+                    isPubliclyVisible: Boolean(p.is_on_leaderboard && isFullyQualified),
                     starCount: Number(p.star_count || 0),
+                    totalTasks: Number(p.total_tasks || 0),
+                    pendingTasks: Number(p.pending_tasks || 0),
+                    ownerId: p.owner_id,
+                    ownerName: p.owner_name || "",
+                    ownerEmail: p.owner_email || "",
                 };
             }),
         });

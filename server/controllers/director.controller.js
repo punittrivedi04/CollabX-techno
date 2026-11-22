@@ -177,9 +177,9 @@ export const getDirectorOverview = async (req, res, next) => {
                             )
                             FROM projects p
                         ) AS avg_project_progress,
-                        (SELECT COUNT(*)::int FROM tasks) AS total_tasks,
-                        (SELECT COUNT(*)::int FROM tasks WHERE status = 'Completed') AS completed_tasks,
-                        (SELECT COUNT(*)::int FROM tasks WHERE status != 'Completed') AS pending_tasks
+                        (SELECT COUNT(*)::int FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE p.status != 'Archived' OR p.status IS NULL) AS total_tasks,
+                        (SELECT COUNT(*)::int FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE LOWER(TRIM(t.status)) IN ('completed', 'done') AND (p.status != 'Archived' OR p.status IS NULL)) AS completed_tasks,
+                        (SELECT COUNT(*)::int FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done') AND (p.status != 'Archived' OR p.status IS NULL)) AS pending_tasks
                 `),
                 pool.query(`
                     SELECT m.id, m.name, m.email, m.is_active,
@@ -271,12 +271,13 @@ export const getDirectorOverview = async (req, res, next) => {
                     JOIN projects p ON p.id = s.pid;
                 `),
                 pool.query(`
-                    SELECT assigned_to,
+                    SELECT t.assigned_to,
                            COUNT(*)::int AS total_tasks,
-                           COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_tasks
-                    FROM tasks
-                    WHERE assigned_to IS NOT NULL
-                    GROUP BY assigned_to;
+                           COUNT(*) FILTER (WHERE LOWER(TRIM(t.status)) IN ('completed', 'done'))::int AS completed_tasks
+                    FROM tasks t
+                    LEFT JOIN projects p ON p.id = t.project_id
+                    WHERE t.assigned_to IS NOT NULL AND (p.status != 'Archived' OR p.status IS NULL)
+                    GROUP BY t.assigned_to;
                 `),
                 pool.query(`
                     SELECT a.id, a.project_id, a.user_id, a.action, a.description, a.entity_type, a.entity_id, a.created_at,
@@ -578,12 +579,13 @@ export const getDirectorReports = async (req, res, next) => {
                     JOIN projects p ON p.id = s.pid;
                 `),
                 pool.query(`
-                    SELECT assigned_to,
+                    SELECT t.assigned_to,
                            COUNT(*)::int AS total_tasks,
-                           COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_tasks
-                    FROM tasks
-                    WHERE assigned_to IS NOT NULL
-                    GROUP BY assigned_to;
+                           COUNT(*) FILTER (WHERE LOWER(TRIM(t.status)) IN ('completed', 'done'))::int AS completed_tasks
+                    FROM tasks t
+                    LEFT JOIN projects p ON p.id = t.project_id
+                    WHERE t.assigned_to IS NOT NULL AND (p.status != 'Archived' OR p.status IS NULL)
+                    GROUP BY t.assigned_to;
                 `),
                 pool.query(`
                     SELECT a.id, a.title, a.content, a.target_role, a.created_at, u.name AS creator_name
@@ -950,6 +952,223 @@ export const getDirectorMentorById = async (req, res, next) => {
             readOnly: true,
             mentor: detail,
             data: detail,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// ==========================================
+// 5. GET /api/director/students/:id (Read-Only Inspection)
+// ==========================================
+export const getDirectorStudentById = async (req, res, next) => {
+    try {
+        const studentId = parsePositiveInt(req.params.id);
+        if (!studentId) {
+            return res.status(400).json({ success: false, message: "Valid student ID is required" });
+        }
+
+        const cacheKey = `director:student:u:${req.user.id}:sid:${studentId}`;
+        const detail = await readCache.getOrSet(cacheKey, async () => {
+            const studentRes = await pool.query(
+                `SELECT u.id, u.name, u.email, u.role, u.department, u.phone, u.roll_no,
+                        u.avatar, u.is_active, u.created_at, u.mentor_id,
+                        m.name AS mentor_name, m.email AS mentor_email, m.phone AS mentor_phone
+                 FROM users u
+                 LEFT JOIN users m ON m.id = u.mentor_id
+                 WHERE u.id = $1 AND LOWER(COALESCE(u.role, 'student')) = 'student';`,
+                [studentId]
+            );
+
+            if (studentRes.rows.length === 0) return null;
+            const student = studentRes.rows[0];
+
+            const [projectsRes, tasksRes, statsRes] = await Promise.all([
+                pool.query(
+                    `SELECT DISTINCT p.*,
+                            o.name AS owner_name, o.email AS owner_email,
+                            m.name AS mentor_name, m.email AS mentor_email,
+                            (p.owner_id = $1 OR EXISTS (
+                                SELECT 1 FROM project_members pm_leader
+                                WHERE pm_leader.project_id = p.id
+                                  AND pm_leader.user_id = $1
+                                  AND LOWER(TRIM(pm_leader.role)) = 'leader'
+                            )) AS is_leader,
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(t.status)) IN ('completed', 'done')) AS completed_tasks
+                     FROM projects p
+                     LEFT JOIN project_members pm ON pm.project_id = p.id
+                     LEFT JOIN users o ON o.id = p.owner_id
+                     LEFT JOIN users m ON m.id = p.mentor_id
+                     WHERE (p.owner_id = $1 OR pm.user_id = $1)
+                       AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                     ORDER BY p.created_at DESC;`,
+                    [studentId]
+                ),
+                pool.query(
+                    `SELECT t.*, p.title AS project_title,
+                            u_a.name AS assignee_name, u_a.email AS assignee_email,
+                            u_c.name AS creator_name, u_c.email AS creator_email
+                     FROM tasks t
+                     LEFT JOIN projects p ON p.id = t.project_id
+                     LEFT JOIN users u_a ON u_a.id = t.assigned_to
+                     LEFT JOIN users u_c ON u_c.id = t.created_by
+                     WHERE t.assigned_to = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                     ORDER BY t.created_at DESC
+                     LIMIT 100;`,
+                    [studentId]
+                ),
+                pool.query(
+                    `SELECT
+                        COUNT(*)::int AS total_tasks,
+                        COUNT(CASE WHEN LOWER(TRIM(t.status)) IN ('completed', 'done') THEN 1 END)::int AS completed_tasks,
+                        COUNT(CASE WHEN LOWER(TRIM(t.status)) = 'in progress' THEN 1 END)::int AS in_progress_tasks,
+                        COUNT(CASE WHEN LOWER(TRIM(t.status)) = 'todo' THEN 1 END)::int AS todo_tasks
+                     FROM tasks t
+                     LEFT JOIN projects p ON p.id = t.project_id
+                     WHERE t.assigned_to = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived');`,
+                    [studentId]
+                ),
+            ]);
+
+            const seenProjectIds = new Set();
+            const uniqueProjects = [];
+            for (const p of projectsRes.rows) {
+                if (!seenProjectIds.has(p.id)) {
+                    seenProjectIds.add(p.id);
+                    uniqueProjects.push(p);
+                }
+            }
+
+            const projectIds = uniqueProjects.map((p) => p.id);
+            const activitiesRes = await pool.query(
+                `SELECT a.*, u.name AS user_name, u.email AS user_email, u.role AS user_role,
+                        p.title AS project_title
+                 FROM activities a
+                 LEFT JOIN users u ON u.id = a.user_id
+                 LEFT JOIN projects p ON p.id = a.project_id
+                 WHERE a.user_id = $1
+                    OR (a.entity_type = 'User' AND a.entity_id = $1)
+                    OR ($2::int[] IS NOT NULL AND a.project_id = ANY($2))
+                 ORDER BY a.created_at DESC
+                 LIMIT 30;`,
+                [studentId, projectIds.length > 0 ? projectIds : null]
+            );
+
+            const tasks = tasksRes.rows.map((t) => ({
+                id: t.id,
+                _id: t.id,
+                title: t.title,
+                description: t.description || "",
+                status: t.status,
+                priority: t.priority,
+                deadline: t.deadline,
+                dueDate: t.deadline,
+                projectId: t.project_id,
+                projectTitle: t.project_title || "",
+                assignedTo: t.assigned_to ? { id: t.assigned_to, name: t.assignee_name, email: t.assignee_email } : null,
+                createdBy: t.created_by ? { id: t.created_by, name: t.creator_name, email: t.creator_email } : null,
+                createdAt: t.created_at,
+                updatedAt: t.updated_at,
+            }));
+
+            const taskStats = statsRes.rows[0] || { total_tasks: 0, completed_tasks: 0 };
+            const totalTasks = Number(taskStats.total_tasks || 0);
+            const completedTasks = Number(taskStats.completed_tasks || 0);
+            const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+            const teams = uniqueProjects.map((p) => {
+                const totalT = Number(p.total_tasks || 0);
+                const compT = Number(p.completed_tasks || 0);
+                const taskProgressRate = totalT > 0 ? Math.round((compT / totalT) * 100) : 0;
+                const isLeader = Boolean(p.is_leader) || Number(p.owner_id) === studentId;
+                const status = String(p.status).toLowerCase() === "completed" && (totalT === 0 || compT < totalT)
+                    ? (compT > 0 ? "In Progress" : "Planning")
+                    : p.status;
+                return {
+                    id: p.id,
+                    _id: p.id,
+                    title: p.title,
+                    name: p.title,
+                    status,
+                    progress: taskProgressRate,
+                    deadline: p.deadline,
+                    isLeader,
+                    mentor: p.mentor_id ? { id: p.mentor_id, name: p.mentor_name, email: p.mentor_email } : null,
+                    taskProgress: {
+                        total: totalT,
+                        completed: compT,
+                        pending: Math.max(0, totalT - compT),
+                        completionRate: taskProgressRate,
+                    },
+                };
+            });
+
+            const isLeader = teams.some((t) => t.isLeader);
+            const leaderProjectsCount = teams.filter((t) => t.isLeader).length;
+            const projectCount = teams.length;
+            const teamCount = teams.length;
+
+            const assignedMentor = student.mentor_id
+                ? { id: student.mentor_id, name: student.mentor_name, email: student.mentor_email, phone: student.mentor_phone || "" }
+                : teams[0]?.mentor || null;
+
+            return {
+                id: student.id,
+                student: {
+                    id: student.id,
+                    name: student.name,
+                    email: student.email,
+                    role: student.role || "student",
+                    department: student.department || "",
+                    phone: student.phone || "",
+                    roll_no: student.roll_no || "",
+                    rollNumber: student.roll_no || "",
+                    avatar: student.avatar || null,
+                    isActive: Boolean(student.is_active),
+                    is_active: Boolean(student.is_active),
+                    createdAt: student.created_at,
+                    mentor: assignedMentor,
+                    isLeader,
+                    projectCount,
+                    teamCount,
+                    leaderProjectsCount,
+                },
+                mentor: assignedMentor,
+                team: teams[0] || null,
+                project: teams[0] || null,
+                teams,
+                projects: teams,
+                tasks,
+                projectCount,
+                teamCount,
+                leaderProjectsCount,
+                isLeader,
+                taskProgress: {
+                    total: totalTasks,
+                    completed: completedTasks,
+                    totalTasks,
+                    completedTasks,
+                    pending: Math.max(0, totalTasks - completedTasks),
+                    todo: Number(taskStats.todo_tasks || 0),
+                    inProgress: Number(taskStats.in_progress_tasks || 0),
+                    completionRate,
+                },
+                recentActivities: activitiesRes.rows.map(formatActivityRow),
+                activityHistory: activitiesRes.rows.map(formatActivityRow),
+            };
+        });
+
+        if (!detail) {
+            return res.status(404).json({ success: false, message: "Student not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            readOnly: true,
+            student: detail.student,
+            data: detail,
+            ...detail,
         });
     } catch (error) {
         next(error);

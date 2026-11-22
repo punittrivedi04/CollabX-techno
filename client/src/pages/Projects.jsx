@@ -166,17 +166,31 @@ export default function Projects() {
     pptUrl: "",
   });
   const [savingLinks, setSavingLinks] = useState(false);
+  const [selectedProjectDetails, setSelectedProjectDetails] = useState(null);
 
   const todayStr = getTodayDateString();
 
   useEffect(() => {
-    if (!showModal && !showLinksModal) return;
+    if (!showModal && !showLinksModal && !selectedProjectDetails) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prevOverflow;
     };
-  }, [showModal, showLinksModal]);
+  }, [showModal, showLinksModal, selectedProjectDetails]);
+
+  useEffect(() => {
+    if (!selectedProjectDetails) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setSelectedProjectDetails(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedProjectDetails]);
 
   const openProjectChat = (projectId) => {
     if (isDirector) return;
@@ -488,12 +502,52 @@ export default function Projects() {
   };
 
   const currentUserId = String(user?._id || user?.id || "");
+  const userRole = String(user?.role || "").toLowerCase().trim();
+  const isAdmin = userRole === "admin" || userRole === "coordinator";
+
+  const isLeaderProject = (p) => {
+    if (!p) return false;
+    if (isAdmin) return true;
+    const ownerId = String(p.owner_id || p.owner?.id || p.owner?._id || p.owner || "");
+    if (ownerId && ownerId === currentUserId) return true;
+    const list = Array.isArray(p.members) ? p.members : (Array.isArray(p.teamMembers) ? p.teamMembers : []);
+    return list.some(
+      (m) =>
+        String(m?._id || m?.id || m?.user?._id || m?.user || m) === currentUserId &&
+        String(m?.role || "").toLowerCase() === "leader"
+    );
+  };
+
+  const isOwnerOfAnyProject = useMemo(() => {
+    return allProjects.some((p) => {
+      const ownerId = String(p.owner_id || p.owner?.id || p.owner?._id || p.owner || "");
+      return ownerId === currentUserId;
+    });
+  }, [allProjects, currentUserId]);
+
+  const isLeaderOfAnyProject = useMemo(() => {
+    return allProjects.some(isLeaderProject);
+  }, [allProjects, currentUserId, isAdmin]);
+
+  const isMemberInOtherProject = useMemo(() => {
+    return allProjects.some((p) => {
+      const ownerId = String(p.owner_id || p.owner?.id || p.owner?._id || p.owner || "");
+      if (ownerId === currentUserId) return false;
+      const list = Array.isArray(p.members) ? p.members : (Array.isArray(p.teamMembers) ? p.teamMembers : []);
+      return list.some((m) => String(m?._id || m?.id || m?.user?._id || m?.user || m) === currentUserId);
+    });
+  }, [allProjects, currentUserId]);
+
+  // Students can create projects even if they are regular members in another squad.
+  // Only the Director is restricted (read-only executive mode).
+  const canCreateProject = !isDirector;
+  const canUploadDeliverables = !isDirector && (isAdmin || isLeaderOfAnyProject);
 
   const isUserProject = (p) => {
     if (!p) return false;
     if (isDirector) return true;
     if (!currentUserId) return true;
-    const ownerId = String(p.owner?._id || p.owner?.id || p.owner || "");
+    const ownerId = String(p.owner_id || p.owner?._id || p.owner?.id || p.owner || "");
     if (ownerId && ownerId === currentUserId) return true;
     if (Array.isArray(p.members)) {
       if (p.members.some((m) => String(m?._id || m?.id || m) === currentUserId))
@@ -516,28 +570,28 @@ export default function Projects() {
     const map = new Map();
     (allProjectsList || []).forEach((p) => {
       const id = p?._id || p?.id;
-      if (id && isUserProject(p)) map.set(String(id), p);
+      if (id && isLeaderProject(p)) map.set(String(id), p);
     });
     (allProjects || []).forEach((p) => {
       const id = p?._id || p?.id;
-      if (id && !map.has(String(id)) && isUserProject(p))
+      if (id && !map.has(String(id)) && isLeaderProject(p))
         map.set(String(id), p);
     });
     return Array.from(map.values());
-  }, [allProjectsList, allProjects, currentUserId]);
+  }, [allProjectsList, allProjects, currentUserId, isAdmin]);
 
   const fetchAllProjectsForDropdown = async () => {
     try {
       const res = await api.get("/projects", { params: { limit: 50 } });
       if (res.data?.projects) {
-        const userProjects = res.data.projects.filter(isUserProject);
+        const userProjects = res.data.projects.filter(isLeaderProject);
         setAllProjectsList(userProjects);
         return userProjects;
       }
     } catch {
       // fallback
     }
-    return allProjects.filter(isUserProject);
+    return allProjects.filter(isLeaderProject);
   };
 
   const openLinksModal = async (targetProject = null) => {
@@ -669,22 +723,26 @@ export default function Projects() {
 
           {!isDirector ? (
             <div className="flex flex-wrap items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => openLinksModal()}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-2xs"
-              >
-                <Upload size={16} />
-                Upload Project
-              </button>
+              {canUploadDeliverables && (
+                <button
+                  type="button"
+                  onClick={() => openLinksModal()}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-2xs"
+                >
+                  <Upload size={16} />
+                  Upload Project
+                </button>
+              )}
 
-              <button
-                onClick={openCreateModal}
-                className="inline-flex items-center justify-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-xs"
-              >
-                <Plus size={17} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
-                Create Project
-              </button>
+              {canCreateProject && (
+                <button
+                  onClick={openCreateModal}
+                  className="inline-flex items-center justify-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold shadow-xs"
+                >
+                  <Plus size={17} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
+                  Create Project
+                </button>
+              )}
             </div>
           ) : (
             <div className="inline-flex items-center gap-2 rounded-full border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] px-4 py-2 text-xs font-bold text-[#1E6B4B] dark:text-[#6EE7B7]">
@@ -840,7 +898,7 @@ export default function Projects() {
               >
                 Reset Filters
               </button>
-            ) : !isDirector && (
+            ) : !isDirector && canCreateProject && (
               <button
                 onClick={openCreateModal}
                 className="mt-5 inline-flex items-center gap-1.5 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-xs font-bold"
@@ -874,21 +932,31 @@ export default function Projects() {
                   ? (stats.completed > 0 ? "In Progress" : "Planning")
                   : rawStatus;
 
+                const isProjectLeader =
+                  !isDirector &&
+                  (isAdmin ||
+                    String(
+                      project.owner_id ||
+                        project.owner?.id ||
+                        project.owner?._id ||
+                        project.owner ||
+                        "",
+                    ) === currentUserId);
+
                 return (
                   <div
                     key={pId}
-                    onClick={() => openProjectChat(pId)}
+                    onClick={() => setSelectedProjectDetails(project)}
                     role="button"
                     tabIndex={0}
+                    title="Click to view full project specifications & deliverables"
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openProjectChat(pId);
+                        setSelectedProjectDetails(project);
                       }
                     }}
-                    className={`group rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-6 shadow-2xs transition sm:p-7 ${
-                      !isDirector ? "cursor-pointer hover:border-[#1E2422]/40 hover:shadow-sm" : ""
-                    }`}
+                    className="group rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-6 shadow-2xs transition sm:p-7 cursor-pointer hover:border-[#1E2422]/40 hover:shadow-sm"
                   >
                     {/* Project Header */}
                     <div className="flex items-start justify-between gap-3">
@@ -908,8 +976,8 @@ export default function Projects() {
                         </div>
                       </div>
 
-                      {/* Edit and Delete (Hidden for Director) */}
-                      {!isDirector && (
+                      {/* Edit and Delete (Only for Project Leader or Admin) */}
+                      {isProjectLeader && (
                         <div className="flex shrink-0 items-center gap-1.5">
                           <button
                             onClick={(e) => {
@@ -1044,8 +1112,8 @@ export default function Projects() {
                           )}
                       </div>
 
-                      {/* Upload / Edit Project Button (Strict Dual Condition Gatekeeper) */}
-                      {!isDirector && (
+                      {/* Upload / Edit Project Button (Strict Dual Condition Gatekeeper & Project Leader Only) */}
+                      {isProjectLeader && (
                         <button
                           type="button"
                           disabled={!isUnlocked}
@@ -1615,6 +1683,266 @@ export default function Projects() {
                     })()}
                   </div>
                 </form>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+        {/* Project Details Modal (Full Untruncated Title, Description, Links, Status & Specs) */}
+        {selectedProjectDetails &&
+          createPortal(
+            <div
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+              onClick={() => setSelectedProjectDetails(null)}
+            >
+              <div
+                className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-[28px] border border-[#D4DFD7] bg-[#FAFBF9] shadow-2xl dark:border-[#1F2C26] dark:bg-[#111815]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Pinned Non-Scrolling Header */}
+                <div className="flex shrink-0 items-center justify-between border-b border-[#E4ECE6] px-6 py-5 dark:border-[#1F2C26]">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100">
+                      <FolderKanban size={20} />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-[#141A18] dark:text-slate-100">
+                        Project Details
+                      </h2>
+                      <p className="mt-0.5 text-xs font-medium text-[#5C6B66] dark:text-[#94A89D]">
+                        Full specifications, progress &amp; deliverables
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProjectDetails(null)}
+                    aria-label="Close modal"
+                    className="rounded-full bg-[#EFF4F0] dark:bg-[#1A2520] p-2 text-[#42504B] dark:text-slate-300 transition hover:bg-[#D4DFD7] dark:hover:bg-[#26352D]"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Internal Scrollable Body */}
+                <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5 scrollbar-thin">
+                  {/* Full Untruncated Title */}
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                      Project Title
+                    </span>
+                    <h3 className="mt-1 text-xl font-extrabold leading-snug text-[#141A18] dark:text-slate-100 break-words">
+                      {selectedProjectDetails.title || selectedProjectDetails.name}
+                    </h3>
+                  </div>
+
+                  {/* Badges: Status, Priority, Leaderboard, Members */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(() => {
+                      const detailsStats = projectStats[String(selectedProjectDetails._id || selectedProjectDetails.id)];
+                      const rawSt = selectedProjectDetails.status || "Planning";
+                      const dispSt = String(rawSt).toLowerCase() === "completed" && !detailsStats?.isTasksCompleted
+                        ? (detailsStats?.completed > 0 ? "In Progress" : "Planning")
+                        : rawSt;
+                      return (
+                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusStyles[dispSt] || statusStyles.Planning}`}>
+                          {dispSt}
+                        </span>
+                      );
+                    })()}
+
+                    <span className="rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-3 py-1 text-xs font-semibold text-[#42504B] dark:text-slate-300">
+                      {selectedProjectDetails.priority || "Medium"} Priority
+                    </span>
+
+                    {(selectedProjectDetails.isOnLeaderboard || selectedProjectDetails.is_on_leaderboard) && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/40 bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-400">
+                        <Trophy size={11} className="text-amber-500" />
+                        <span>On Leaderboard</span>
+                      </span>
+                    )}
+
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-3 py-1 text-xs font-semibold text-[#42504B] dark:text-slate-300">
+                      <Users size={13} />
+                      <span>
+                        {selectedProjectDetails.memberCount ??
+                          ((selectedProjectDetails.members?.length || 0) + (selectedProjectDetails.owner ? 1 : 0))} members
+                      </span>
+                    </span>
+                  </div>
+
+                  {/* Full Untruncated Description */}
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                      Description
+                    </span>
+                    <div className="mt-1.5 rounded-2xl border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] p-4 text-sm leading-relaxed text-[#42504B] dark:text-slate-300 whitespace-pre-wrap break-words">
+                      {selectedProjectDetails.description || "No description provided."}
+                    </div>
+                  </div>
+
+                  {/* Progress Box */}
+                  {(() => {
+                    const detailsStats = projectStats[String(selectedProjectDetails._id || selectedProjectDetails.id)] || {
+                      total: 0,
+                      completed: 0,
+                      progress: 0,
+                    };
+                    const prgColor = getProgressColor(detailsStats.progress);
+                    return (
+                      <div className="rounded-2xl border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] p-4">
+                        <div className="mb-2 flex items-center justify-between text-xs">
+                          <span className="font-semibold text-[#5C6B66] dark:text-[#94A89D]">
+                            Task Completion ({detailsStats.completed}/{detailsStats.total})
+                          </span>
+                          <span className={`font-extrabold ${prgColor.text}`}>
+                            {detailsStats.progress}%
+                          </span>
+                        </div>
+                        <div className="h-2.5 overflow-hidden rounded-full bg-[#EFF4F0] dark:bg-[#1A2520]">
+                          <div
+                            className={`h-full rounded-full transition-all ${prgColor.bar}`}
+                            style={{ width: `${detailsStats.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Key Metadata Grid */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] p-3.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                        Team Leader
+                      </span>
+                      <p className="mt-1 text-sm font-bold text-[#141A18] dark:text-slate-100 truncate">
+                        {selectedProjectDetails.owner?.name || "Team Leader"}
+                      </p>
+                      {selectedProjectDetails.owner?.email && (
+                        <p className="text-xs text-[#5C6B66] dark:text-[#94A89D] truncate">
+                          {selectedProjectDetails.owner.email}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-[#E4ECE6] dark:border-[#24322B] bg-white dark:bg-[#0C120F] p-3.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                        Deadline &amp; Created
+                      </span>
+                      <p className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-[#141A18] dark:text-slate-100">
+                        <CalendarDays size={13} className="text-[#5C6B66] dark:text-[#94A89D]" />
+                        <span>
+                          {selectedProjectDetails.deadline
+                            ? `Deadline: ${new Date(selectedProjectDetails.deadline).toLocaleDateString()}`
+                            : "No deadline set"}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-xs text-[#5C6B66] dark:text-[#94A89D]">
+                        Created {new Date(selectedProjectDetails.createdAt || selectedProjectDetails.created_at || Date.now()).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Deliverables / Links */}
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
+                      Project Deliverables &amp; Links
+                    </span>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {typeof selectedProjectDetails.githubUrl === "string" &&
+                        selectedProjectDetails.githubUrl.trim().length > 0 && (
+                          <a
+                            href={selectedProjectDetails.githubUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"
+                          >
+                            <GithubIcon size={14} />
+                            <span>GitHub Repository</span>
+                          </a>
+                        )}
+
+                      {typeof selectedProjectDetails.demoUrl === "string" &&
+                        selectedProjectDetails.demoUrl.trim().length > 0 && (
+                          <a
+                            href={selectedProjectDetails.demoUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"
+                          >
+                            <span>Live Hosted Demo</span>
+                            <ArrowUpRight size={13} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
+                          </a>
+                        )}
+
+                      {typeof selectedProjectDetails.pptUrl === "string" &&
+                        selectedProjectDetails.pptUrl.trim().length > 0 && (
+                          <a
+                            href={selectedProjectDetails.pptUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"
+                          >
+                            <Presentation size={14} />
+                            <span>Presentation (PPT)</span>
+                          </a>
+                        )}
+
+                      {!selectedProjectDetails.githubUrl &&
+                        !selectedProjectDetails.demoUrl &&
+                        !selectedProjectDetails.pptUrl && (
+                          <p className="text-xs text-[#5C6B66] dark:text-[#94A89D]">
+                            No deliverable links uploaded yet.
+                          </p>
+                        )}
+                    </div>
+                  </div>
+
+                  {/* Faculty Mentor Review */}
+                  {selectedProjectDetails.mentorReview && (
+                    <div className="rounded-2xl border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0]/60 dark:bg-[#0C120F] p-4 text-xs">
+                      <div className="flex items-center justify-between gap-2 border-b border-[#D4DFD7] dark:border-[#1F2C26] pb-2 text-[11px] font-bold">
+                        <span className="flex items-center gap-1.5 uppercase tracking-wider text-[#15803D] dark:text-[#A3E635]">
+                          <Award size={13} /> Faculty Mentor Review
+                        </span>
+                        <span className="text-[#5C6B66] dark:text-[#94A89D]">
+                          {selectedProjectDetails.reviewedAt ? new Date(selectedProjectDetails.reviewedAt).toLocaleDateString() : "Verified"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-[#141A18] dark:text-slate-200 font-medium whitespace-pre-wrap">
+                        &ldquo;{selectedProjectDetails.mentorReview}&rdquo;
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Pinned Footer */}
+                <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[#E4ECE6] px-6 py-4 dark:border-[#1F2C26]">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProjectDetails(null)}
+                    className="rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-5 py-2.5 text-sm font-bold"
+                  >
+                    Close
+                  </button>
+
+                  {!isDirector && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const pId = selectedProjectDetails._id || selectedProjectDetails.id;
+                        setSelectedProjectDetails(null);
+                        openProjectChat(pId);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-6 py-2.5 text-sm font-bold shadow-xs"
+                    >
+                      <MessageSquare size={16} />
+                      <span>Open Project Chat</span>
+                      <ArrowUpRight size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>,
             document.body,

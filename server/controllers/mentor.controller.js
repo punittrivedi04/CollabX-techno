@@ -9,6 +9,7 @@ import {
 } from "../utils/formatters.js";
 import { readCache, invalidateAllCaches } from "../utils/microCache.js";
 import logActivity from "../utils/activityLogger.js";
+import { sendAnnouncementEmail } from "../utils/sendEmail.js";
 
 const VALID_TASK_STATUSES = ["Todo", "In Progress", "In Review", "Completed"];
 const VALID_PRIORITIES = ["Low", "Medium", "High"];
@@ -118,12 +119,12 @@ const isMentorAuthorizedForStudent = async (mentorId, studentId) => {
            AND LOWER(COALESCE(u.role, 'student')) = 'student'
            AND (
                u.mentor_id = $1
-               OR EXISTS (SELECT 1 FROM projects p WHERE p.mentor_id = $1 AND p.owner_id = $2)
+               OR EXISTS (SELECT 1 FROM projects p WHERE p.mentor_id = $1 AND p.owner_id = $2 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived'))
                OR EXISTS (
                    SELECT 1
                    FROM project_members pm
                    JOIN projects p ON p.id = pm.project_id
-                   WHERE p.mentor_id = $1 AND pm.user_id = $2
+                   WHERE p.mentor_id = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived') AND pm.user_id = $2
                )
            )
          LIMIT 1;`,
@@ -152,10 +153,10 @@ export const getMentorOverview = async (req, res, next) => {
                                 ) sub
                             ) AS member_count,
                             (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
                      FROM projects p
                      LEFT JOIN users o ON o.id = p.owner_id
-                     WHERE p.mentor_id = $1
+                     WHERE p.mentor_id = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                      ORDER BY p.updated_at DESC, p.id DESC;`,
                     [mentorId]
                 ),
@@ -166,11 +167,11 @@ export const getMentorOverview = async (req, res, next) => {
                      WHERE LOWER(COALESCE(u.role, 'student')) = 'student'
                        AND (
                            u.mentor_id = $1
-                           OR u.id IN (SELECT owner_id FROM projects WHERE mentor_id = $1 AND owner_id IS NOT NULL)
+                           OR u.id IN (SELECT owner_id FROM projects WHERE mentor_id = $1 AND owner_id IS NOT NULL AND (status IS NULL OR LOWER(TRIM(status)) != 'archived'))
                            OR u.id IN (
                                SELECT pm.user_id FROM project_members pm
                                JOIN projects p ON p.id = pm.project_id
-                               WHERE p.mentor_id = $1
+                               WHERE p.mentor_id = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                            )
                        )
                      ORDER BY u.created_at DESC, u.id DESC;`,
@@ -192,8 +193,8 @@ export const getMentorOverview = async (req, res, next) => {
                 const [taskStatsRes, pendingTasksRes, upcomingTaskRes, activitiesRes] = await Promise.all([
                     pool.query(
                         `SELECT
-                            COUNT(*) FILTER (WHERE status != 'Completed')::int AS pending_tasks,
-                            COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_tasks
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status, ''))) NOT IN ('completed', 'done'))::int AS pending_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('completed', 'done'))::int AS completed_tasks
                          FROM tasks
                          WHERE project_id = ANY($1);`,
                         [projectIds]
@@ -206,7 +207,7 @@ export const getMentorOverview = async (req, res, next) => {
                          JOIN projects p ON p.id = t.project_id
                          LEFT JOIN users u_a ON u_a.id = t.assigned_to
                          LEFT JOIN users u_c ON u_c.id = t.created_by
-                         WHERE t.project_id = ANY($1) AND t.status != 'Completed'
+                         WHERE t.project_id = ANY($1) AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')
                          ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC
                          LIMIT 15;`,
                         [projectIds]
@@ -220,7 +221,7 @@ export const getMentorOverview = async (req, res, next) => {
                          WHERE t.project_id = ANY($1)
                            AND t.due_date IS NOT NULL
                            AND t.due_date >= NOW()
-                           AND t.status != 'Completed'
+                           AND LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done')
                          ORDER BY t.due_date ASC
                          LIMIT 10;`,
                         [projectIds]
@@ -270,7 +271,7 @@ export const getMentorOverview = async (req, res, next) => {
 
             const now = Date.now();
             const upcomingProjectDeadlines = projects
-                .filter((p) => p.deadline && new Date(p.deadline).getTime() >= now && p.status !== "Completed")
+                .filter((p) => p.deadline && new Date(p.deadline).getTime() >= now && String(p.status || "").trim().toLowerCase() !== "completed")
                 .map((p) => ({
                     type: "project",
                     id: p.id,
@@ -316,7 +317,7 @@ export const getMentorOverview = async (req, res, next) => {
                 };
             });
 
-            const activeProjects = projects.filter((p) => p.status !== "Completed").length;
+            const activeProjects = projects.filter((p) => String(p.status || "").trim().toLowerCase() !== "completed").length;
             const stats = {
                 totalStudents: students.length,
                 totalTeams: projects.length,
@@ -376,11 +377,14 @@ export const getMentorStudents = async (req, res, next) => {
                 "LOWER(COALESCE(u.role, 'student')) = 'student'",
                 `(
                     u.mentor_id = $1
-                    OR u.id IN (SELECT owner_id FROM projects WHERE mentor_id = $1 AND owner_id IS NOT NULL)
+                    OR u.id IN (
+                        SELECT owner_id FROM projects
+                        WHERE mentor_id = $1 AND owner_id IS NOT NULL AND (status IS NULL OR LOWER(TRIM(status)) != 'archived')
+                    )
                     OR u.id IN (
                         SELECT pm.user_id FROM project_members pm
                         JOIN projects p ON p.id = pm.project_id
-                        WHERE p.mentor_id = $1
+                        WHERE p.mentor_id = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                     )
                 )`,
             ];
@@ -398,7 +402,7 @@ export const getMentorStudents = async (req, res, next) => {
                 conditions.push(`EXISTS (
                     SELECT 1 FROM projects p
                     LEFT JOIN project_members pm ON pm.project_id = p.id
-                    WHERE p.id = $${idx} AND p.mentor_id = $1 AND (p.owner_id = u.id OR pm.user_id = u.id)
+                    WHERE p.id = $${idx} AND (p.mentor_id = $1 OR (p.mentor_id IS NULL AND u.mentor_id = $1)) AND (p.owner_id = u.id OR pm.user_id = u.id)
                 )`);
             }
 
@@ -412,53 +416,86 @@ export const getMentorStudents = async (req, res, next) => {
                 params
             );
 
-            if (studentRows.length === 0) return [];
-            const studentIds = studentRows.map((s) => s.id);
+            // Deduplicate students strictly by user ID
+            const uniqueStudents = [];
+            const seenStudentIds = new Set();
+            for (const s of studentRows) {
+                if (!seenStudentIds.has(s.id)) {
+                    seenStudentIds.add(s.id);
+                    uniqueStudents.push(s);
+                }
+            }
+
+            if (uniqueStudents.length === 0) return [];
+            const studentIds = uniqueStudents.map((s) => s.id);
+
+            const queryParams = teamId ? [mentorId, studentIds, teamId] : [mentorId, studentIds];
+            const teamProjectFilter = teamId ? "AND p.id = $3" : "";
 
             const [projectsRes, tasksRes] = await Promise.all([
                 pool.query(
                     `SELECT DISTINCT p.id, p.title, p.status, p.progress, p.deadline, p.owner_id,
-                            CASE WHEN p.owner_id = s.sid THEN TRUE ELSE FALSE END AS is_leader,
+                            (p.owner_id = s.sid OR EXISTS (
+                                SELECT 1 FROM project_members pm_leader
+                                WHERE pm_leader.project_id = p.id AND pm_leader.user_id = s.sid AND LOWER(TRIM(pm_leader.role)) = 'leader'
+                            )) AS is_leader,
                             s.sid AS student_id,
                             (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
                      FROM (
-                         SELECT owner_id AS sid, id AS pid FROM projects WHERE mentor_id = $1 AND owner_id = ANY($2)
+                         SELECT owner_id AS sid, id AS pid
+                         FROM projects
+                         WHERE (mentor_id = $1 OR (mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = projects.owner_id AND u.mentor_id = $1)))
+                           AND (status IS NULL OR LOWER(TRIM(status)) != 'archived')
+                           AND owner_id = ANY($2)
                          UNION
                          SELECT pm.user_id AS sid, pm.project_id AS pid
                          FROM project_members pm
                          JOIN projects p ON p.id = pm.project_id
-                         WHERE p.mentor_id = $1 AND pm.user_id = ANY($2)
+                         WHERE (p.mentor_id = $1 OR (p.mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = pm.user_id AND u.mentor_id = $1)))
+                           AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                           AND pm.user_id = ANY($2)
                      ) s
                      JOIN projects p ON p.id = s.pid
+                     WHERE 1=1 ${teamProjectFilter}
                      ORDER BY p.id ASC;`,
-                    [mentorId, studentIds]
+                    queryParams
                 ),
                 pool.query(
                     `SELECT t.assigned_to AS student_id,
                             COUNT(*)::int AS total_tasks,
-                            COUNT(*) FILTER (WHERE t.status = 'Completed')::int AS completed_tasks,
-                            COUNT(*) FILTER (WHERE t.status != 'Completed')::int AS pending_tasks
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done'))::int AS completed_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done'))::int AS pending_tasks
                      FROM tasks t
                      JOIN projects p ON p.id = t.project_id
-                     WHERE p.mentor_id = $1 AND t.assigned_to = ANY($2)
+                     WHERE (p.mentor_id = $1 OR (p.mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = t.assigned_to AND u.mentor_id = $1)))
+                       AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                       AND t.assigned_to = ANY($2)
+                       ${teamProjectFilter}
                      GROUP BY t.assigned_to;`,
-                    [mentorId, studentIds]
+                    queryParams
                 ),
             ]);
 
             const projectsByStudent = new Map();
+            const seenStudentProjects = new Set();
             for (const row of projectsRes.rows) {
-                if (!projectsByStudent.has(row.student_id)) projectsByStudent.set(row.student_id, []);
+                const sId = Number(row.student_id);
+                const pId = Number(row.id);
+                const key = `${sId}:${pId}`;
+                if (seenStudentProjects.has(key)) continue;
+                seenStudentProjects.add(key);
+
+                if (!projectsByStudent.has(sId)) projectsByStudent.set(sId, []);
                 const totalT = Number(row.total_tasks || 0);
                 const compT = Number(row.completed_tasks || 0);
                 const taskProgressRate = totalT > 0 ? Math.round((compT / totalT) * 100) : 0;
                 const status = String(row.status).toLowerCase() === "completed" && (totalT === 0 || compT < totalT)
                     ? (compT > 0 ? "In Progress" : "Planning")
                     : row.status;
-                projectsByStudent.get(row.student_id).push({
-                    id: row.id,
-                    _id: row.id,
+                projectsByStudent.get(sId).push({
+                    id: pId,
+                    _id: pId,
                     title: row.title,
                     name: row.title,
                     status,
@@ -481,19 +518,55 @@ export const getMentorStudents = async (req, res, next) => {
                 tasksByStudent.set(row.student_id, {
                     total: totalT,
                     completed: compT,
+                    totalTasks: totalT,
+                    completedTasks: compT,
                     pending: Number(row.pending_tasks || 0),
                     completionRate: totalT > 0 ? Math.round((compT / totalT) * 100) : 0,
                 });
             }
 
-            return studentRows.map((s) => {
+            return uniqueStudents.map((s) => {
                 const teams = projectsByStudent.get(s.id) || [];
+                const primaryTeam = teams[0] || null;
+                const directTp = tasksByStudent.get(s.id) || null;
+
+                // STRICTLY calculate from tasks directly assigned to this specific student (t.assigned_to = student.id).
+                // Never fall back to team-wide or project-level task counts.
+                const assignedTotal = directTp ? Number(directTp.totalTasks || directTp.total || 0) : 0;
+                const assignedCompleted = directTp ? Number(directTp.completedTasks || directTp.completed || 0) : 0;
+                const assignedPending = Math.max(0, assignedTotal - assignedCompleted);
+                const assignedRate = assignedTotal > 0 ? Math.round((assignedCompleted / assignedTotal) * 100) : 0;
+
+                const tp = {
+                    total: assignedTotal,
+                    completed: assignedCompleted,
+                    pending: assignedPending,
+                    completionRate: assignedRate,
+                    totalTasks: assignedTotal,
+                    completedTasks: assignedCompleted,
+                    pendingTasks: assignedPending,
+                };
+
+                const projectCount = teams.length;
+                const leaderProjectsCount = teams.filter((t) => t.isLeader).length;
+                const isLeaderAny = leaderProjectsCount > 0;
+
                 return {
                     ...safeUser(s),
-                    team: teams[0] || null,
-                    project: teams[0] || null,
+                    team: primaryTeam,
+                    project: primaryTeam,
                     teams,
-                    taskProgress: tasksByStudent.get(s.id) || { total: 0, completed: 0, pending: 0, completionRate: 0 },
+                    projects: teams,
+                    projectCount,
+                    teamCount: projectCount,
+                    leaderProjectsCount,
+                    isLeader: isLeaderAny,
+                    taskProgress: tp,
+                    totalTasks: assignedTotal,
+                    completedTasks: assignedCompleted,
+                    pendingTasks: assignedPending,
+                    completionRate: assignedRate,
+                    taskProgressRate: assignedRate,
                 };
             });
         });
@@ -540,27 +613,47 @@ export const getMentorStudentById = async (req, res, next) => {
         const cacheKey = `mentor:student:u:${mentorId}:sid:${studentId}`;
         const detail = await readCache.getOrSet(cacheKey, async () => {
             const student = userCheck.rows[0];
-            const [projectsRes, tasksRes] = await Promise.all([
+            const [projectsRes, taskCountsRes, tasksRes] = await Promise.all([
                 pool.query(
                     `SELECT DISTINCT p.*, o.name AS owner_name, o.email AS owner_email,
+                            (p.owner_id = $2 OR EXISTS (
+                                SELECT 1 FROM project_members pm2
+                                WHERE pm2.project_id = p.id AND pm2.user_id = $2 AND LOWER(TRIM(pm2.role)) = 'leader'
+                            )) AS is_leader,
                             (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
                      FROM projects p
-                     LEFT JOIN project_members pm ON pm.project_id = p.id
                      LEFT JOIN users o ON o.id = p.owner_id
-                     WHERE p.mentor_id = $1 AND (p.owner_id = $2 OR pm.user_id = $2)
+                     WHERE (p.mentor_id = $1 OR (p.mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.mentor_id = $1)))
+                       AND (p.owner_id = $2 OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $2))
+                       AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                      ORDER BY p.created_at DESC;`,
                     [mentorId, studentId]
                 ),
                 pool.query(
-                    `SELECT t.*, p.title AS project_title,
+                    `SELECT COUNT(*)::int AS total_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done'))::int AS completed_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done'))::int AS pending_tasks
+                     FROM tasks t
+                     JOIN projects p ON p.id = t.project_id
+                     WHERE (p.mentor_id = $1 OR (p.mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.mentor_id = $1)))
+                       AND (p.owner_id = $2 OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $2))
+                       AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                       AND t.assigned_to = $2;`,
+                    [mentorId, studentId]
+                ),
+                pool.query(
+                    `SELECT DISTINCT t.*, p.title AS project_title,
                             u_a.name AS assignee_name, u_a.email AS assignee_email,
                             u_c.name AS creator_name, u_c.email AS creator_email
                      FROM tasks t
                      JOIN projects p ON p.id = t.project_id
                      LEFT JOIN users u_a ON u_a.id = t.assigned_to
                      LEFT JOIN users u_c ON u_c.id = t.created_by
-                     WHERE p.mentor_id = $1 AND t.assigned_to = $2
+                     WHERE (p.mentor_id = $1 OR (p.mentor_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.mentor_id = $1)))
+                       AND (p.owner_id = $2 OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $2))
+                       AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                       AND t.assigned_to = $2
                      ORDER BY t.created_at DESC
                      LIMIT 100;`,
                     [mentorId, studentId]
@@ -568,6 +661,8 @@ export const getMentorStudentById = async (req, res, next) => {
             ]);
 
             const projectIds = projectsRes.rows.map((p) => p.id);
+            const taskRows = tasksRes.rows;
+
             const activitiesRes = await pool.query(
                 `SELECT a.*, u.name AS user_name, u.email AS user_email, u.role AS user_role,
                         p.title AS project_title
@@ -581,18 +676,24 @@ export const getMentorStudentById = async (req, res, next) => {
                 [studentId, projectIds.length > 0 ? projectIds : null]
             );
 
-            const formattedTasks = tasksRes.rows.map((t) => formatTask(t));
-            const completedTasks = formattedTasks.filter((t) => t.status === "Completed").length;
-            const totalTasks = formattedTasks.length;
+            const taskCountsRow = taskCountsRes.rows[0] || {};
+            const totalTasks = Number(taskCountsRow.total_tasks || 0);
+            const completedTasks = Number(taskCountsRow.completed_tasks || 0);
+            const pendingTasks = Math.max(0, totalTasks - completedTasks);
+            const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-            const teams = projectsRes.rows.map((p) => {
+            const seenPids = new Set();
+            const teams = [];
+            for (const p of projectsRes.rows) {
+                if (seenPids.has(p.id)) continue;
+                seenPids.add(p.id);
                 const totalT = Number(p.total_tasks || 0);
                 const compT = Number(p.completed_tasks || 0);
                 const taskProgressRate = totalT > 0 ? Math.round((compT / totalT) * 100) : 0;
                 const status = String(p.status).toLowerCase() === "completed" && (totalT === 0 || compT < totalT)
                     ? (compT > 0 ? "In Progress" : "Planning")
                     : p.status;
-                return {
+                teams.push({
                     id: p.id,
                     _id: p.id,
                     title: p.title,
@@ -601,7 +702,7 @@ export const getMentorStudentById = async (req, res, next) => {
                     priority: p.priority,
                     progress: taskProgressRate,
                     deadline: p.deadline,
-                    isLeader: Number(p.owner_id) === studentId,
+                    isLeader: Boolean(p.is_leader),
                     teamLeader: p.owner_id ? { id: p.owner_id, name: p.owner_name, email: p.owner_email } : null,
                     taskProgress: {
                         total: totalT,
@@ -609,8 +710,13 @@ export const getMentorStudentById = async (req, res, next) => {
                         pending: totalT - compT,
                         completionRate: taskProgressRate,
                     },
-                };
-            });
+                });
+            }
+
+            const projectCount = teams.length;
+            const leaderProjectsCount = teams.filter((t) => t.isLeader).length;
+            const isLeaderAny = leaderProjectsCount > 0;
+            const formattedTasks = taskRows.map((t) => formatTask(t));
 
             return {
                 student: safeUser(student),
@@ -618,13 +724,25 @@ export const getMentorStudentById = async (req, res, next) => {
                 project: teams[0] || null,
                 teams,
                 projects: teams,
+                projectCount,
+                teamCount: projectCount,
+                leaderProjectsCount,
+                isLeader: isLeaderAny,
                 tasks: formattedTasks,
                 taskProgress: {
                     total: totalTasks,
                     completed: completedTasks,
-                    pending: totalTasks - completedTasks,
-                    completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+                    totalTasks,
+                    completedTasks,
+                    pending: pendingTasks,
+                    pendingTasks,
+                    completionRate,
                 },
+                totalTasks,
+                completedTasks,
+                pendingTasks,
+                completionRate,
+                taskProgressRate: completionRate,
                 recentActivities: activitiesRes.rows.map(formatActivityRow),
             };
         });
@@ -651,10 +769,10 @@ export const getMentorTeams = async (req, res, next) => {
             const { rows: projects } = await pool.query(
                 `SELECT p.*, o.name AS owner_name, o.email AS owner_email, o.roll_no AS owner_roll_no,
                         (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                        (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                        (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
                  FROM projects p
                  LEFT JOIN users o ON o.id = p.owner_id
-                 WHERE p.mentor_id = $1
+                 WHERE p.mentor_id = $1 AND (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                  ORDER BY p.updated_at DESC, p.id DESC;`,
                 [mentorId]
             );
@@ -756,7 +874,7 @@ export const getMentorTeamById = async (req, res, next) => {
             `SELECT p.*, o.name AS owner_name, o.email AS owner_email, o.roll_no AS owner_roll_no
              FROM projects p
              LEFT JOIN users o ON o.id = p.owner_id
-             WHERE p.id = $1;`,
+             WHERE p.id = $1 AND (p.status != 'Archived' OR p.status IS NULL);`,
             [projectId]
         );
         if (projCheck.rows.length === 0) {
@@ -929,7 +1047,7 @@ export const submitMentorProjectReview = async (req, res, next) => {
             `SELECT p.*, o.name AS owner_name, o.email AS owner_email
              FROM projects p
              LEFT JOIN users o ON o.id = p.owner_id
-             WHERE p.id = $1;`,
+             WHERE p.id = $1 AND (p.status != 'Archived' OR p.status IS NULL);`,
             [projectId]
         );
         if (projRes.rows.length === 0) {
@@ -1106,7 +1224,7 @@ export const createMentorTask = async (req, res, next) => {
         }
 
         const projRes = await pool.query(
-            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1;",
+            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1 AND (status != 'Archived' OR status IS NULL);",
             [parsedProjectId]
         );
         if (projRes.rows.length === 0) {
@@ -1356,7 +1474,7 @@ export const getMentorAnnouncements = async (req, res, next) => {
                  LEFT JOIN users u ON u.id = a.created_by
                  LEFT JOIN projects p ON p.id = a.project_id
                  WHERE (a.project_id IS NULL AND a.target_role IN ('all', 'mentor'))
-                    OR a.project_id IN (SELECT id FROM projects WHERE mentor_id = $1)
+                    OR a.project_id IN (SELECT id FROM projects WHERE mentor_id = $1 AND (status != 'Archived' OR status IS NULL))
                  ORDER BY a.created_at DESC
                  LIMIT 100;`,
                 [mentorId]
@@ -1402,7 +1520,7 @@ export const createMentorAnnouncement = async (req, res, next) => {
         }
 
         const projRes = await pool.query(
-            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1;",
+            "SELECT id, title, owner_id, mentor_id FROM projects WHERE id = $1 AND (status != 'Archived' OR status IS NULL);",
             [parsedProjectId]
         );
         if (projRes.rows.length === 0) {
@@ -1457,6 +1575,33 @@ export const createMentorAnnouncement = async (req, res, next) => {
         ]);
 
         invalidateAllCaches();
+
+        // Non-blocking team announcement email dispatch
+        (async () => {
+            try {
+                const emailsRes = await pool.query(
+                    `SELECT DISTINCT u.email FROM users u
+                     WHERE u.is_active = TRUE AND u.email IS NOT NULL AND (
+                         u.id IN (SELECT owner_id FROM projects WHERE id = $1 AND owner_id IS NOT NULL)
+                         OR u.id IN (SELECT user_id FROM project_members WHERE project_id = $1)
+                     );`,
+                    [parsedProjectId]
+                );
+                const emails = emailsRes.rows.map((r) => r.email).filter(Boolean);
+                if (emails.length > 0) {
+                    await sendAnnouncementEmail({
+                        to: emails,
+                        title: created.title,
+                        content: created.content,
+                        authorName: req.user.name,
+                        authorRole: "Faculty Mentor",
+                        projectTitle: project.title,
+                    });
+                }
+            } catch (mailErr) {
+                console.warn("[Mentor Announcement Email Notice]", mailErr.message);
+            }
+        })();
 
         const formatted = formatAnnouncementRow({
             ...created,

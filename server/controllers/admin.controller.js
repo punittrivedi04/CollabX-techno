@@ -17,6 +17,8 @@ import {
 } from "../utils/microCache.js";
 import { isDirector } from "../middleware/directorGuard.js";
 import logActivity from "../utils/activityLogger.js";
+import { sendAccountApprovalEmail, sendAnnouncementEmail } from "../utils/sendEmail.js";
+import { purgeProjectAndDependents } from "../utils/projectCleanup.js";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^[0-9+\-\s()]{5,30}$/;
@@ -133,7 +135,8 @@ export const getAdminOverview = async (req, res, next) => {
                         (SELECT COUNT(*)::int FROM projects) AS total_teams,
                         (
                             SELECT COUNT(*)::int FROM projects p
-                            WHERE NOT (
+                            WHERE p.status != 'Archived'
+                              AND NOT (
                                 p.status = 'Completed'
                                 AND (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) >= 1
                                 AND (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') = (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id)
@@ -162,10 +165,11 @@ export const getAdminOverview = async (req, res, next) => {
                 pool.query(`
                     SELECT m.id, m.name, m.email, m.roll_no, m.role, m.phone, m.mentor_id, m.role_classified,
                            m.is_verified, m.is_active, m.created_at,
-                           (SELECT COUNT(*)::int FROM projects p WHERE p.mentor_id = m.id) AS team_count,
+                           (SELECT COUNT(*)::int FROM projects p WHERE p.mentor_id = m.id AND p.status != 'Archived') AS team_count,
                            (
                                SELECT COUNT(*)::int FROM projects p
                                WHERE p.mentor_id = m.id
+                                 AND p.status != 'Archived'
                                  AND NOT (
                                      p.status = 'Completed'
                                      AND (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) >= 1
@@ -208,10 +212,11 @@ export const getAdminOverview = async (req, res, next) => {
                                ) stu
                            ) AS student_count,
                            (SELECT COUNT(*)::int FROM users s WHERE s.mentor_id = m.id AND LOWER(COALESCE(s.role, 'student')) = 'student') AS direct_student_count,
-                           (SELECT COUNT(*)::int FROM projects p WHERE p.mentor_id = m.id) AS team_count,
+                           (SELECT COUNT(*)::int FROM projects p WHERE p.mentor_id = m.id AND p.status != 'Archived') AS team_count,
                            (
                                SELECT COUNT(*)::int FROM projects p
                                WHERE p.mentor_id = m.id
+                                 AND p.status != 'Archived'
                                  AND NOT (
                                      p.status = 'Completed'
                                      AND (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) >= 1
@@ -494,49 +499,74 @@ export const getAdminStudents = async (req, res, next) => {
                 return { students: [], total, page, limit };
             }
 
-            const studentIds = students.map((s) => s.id);
+            // Deduplicate students strictly by user ID
+            const uniqueStudents = [];
+            const seenStudentIds = new Set();
+            for (const s of students) {
+                if (!seenStudentIds.has(s.id)) {
+                    seenStudentIds.add(s.id);
+                    uniqueStudents.push(s);
+                }
+            }
+
+            const studentIds = uniqueStudents.map((s) => s.id);
             const [projectsRes, tasksRes] = await Promise.all([
                 pool.query(
                     `SELECT DISTINCT p.id, p.title, p.status, p.progress, p.deadline, p.owner_id, p.mentor_id,
                             m.name AS mentor_name, m.email AS mentor_email,
-                            CASE WHEN p.owner_id = s.sid THEN TRUE ELSE FALSE END AS is_leader,
+                            (p.owner_id = s.sid OR EXISTS (
+                                SELECT 1 FROM project_members pm_leader
+                                WHERE pm_leader.project_id = p.id AND pm_leader.user_id = s.sid AND LOWER(TRIM(pm_leader.role)) = 'leader'
+                            )) AS is_leader,
                             s.sid AS student_id,
                             (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
                      FROM (
-                         SELECT owner_id AS sid, id AS pid FROM projects WHERE owner_id = ANY($1)
+                         SELECT owner_id AS sid, id AS pid FROM projects
+                         WHERE owner_id = ANY($1) AND (status IS NULL OR LOWER(TRIM(status)) != 'archived')
                          UNION
-                         SELECT user_id AS sid, project_id AS pid FROM project_members WHERE user_id = ANY($1)
+                         SELECT pm.user_id AS sid, pm.project_id AS pid FROM project_members pm
+                         JOIN projects p2 ON p2.id = pm.project_id
+                         WHERE pm.user_id = ANY($1) AND (p2.status IS NULL OR LOWER(TRIM(p2.status)) != 'archived')
                      ) s
                      JOIN projects p ON p.id = s.pid
                      LEFT JOIN users m ON m.id = p.mentor_id
+                     WHERE (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
                      ORDER BY p.id ASC;`,
                     [studentIds]
                 ),
                 pool.query(
-                    `SELECT assigned_to AS student_id,
+                    `SELECT t.assigned_to AS student_id,
                             COUNT(*)::int AS total_tasks,
-                            COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_tasks,
-                            COUNT(*) FILTER (WHERE status != 'Completed')::int AS pending_tasks
-                     FROM tasks
-                     WHERE assigned_to = ANY($1)
-                     GROUP BY assigned_to;`,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(t.status)) IN ('completed', 'done'))::int AS completed_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done'))::int AS pending_tasks
+                     FROM tasks t
+                     LEFT JOIN projects p ON p.id = t.project_id
+                     WHERE t.assigned_to = ANY($1) AND (p.status != 'Archived' OR p.status IS NULL)
+                     GROUP BY t.assigned_to;`,
                     [studentIds]
                 ),
             ]);
 
             const projectsByStudent = new Map();
+            const seenStudentProjects = new Set();
             for (const row of projectsRes.rows) {
-                if (!projectsByStudent.has(row.student_id)) projectsByStudent.set(row.student_id, []);
+                const sId = Number(row.student_id);
+                const pId = Number(row.id);
+                const key = `${sId}:${pId}`;
+                if (seenStudentProjects.has(key)) continue;
+                seenStudentProjects.add(key);
+
+                if (!projectsByStudent.has(sId)) projectsByStudent.set(sId, []);
                 const totalT = Number(row.total_tasks || 0);
                 const compT = Number(row.completed_tasks || 0);
                 const taskProgressRate = totalT > 0 ? Math.round((compT / totalT) * 100) : 0;
                 const status = String(row.status).toLowerCase() === "completed" && (totalT === 0 || compT < totalT)
                     ? (compT > 0 ? "In Progress" : "Planning")
                     : row.status;
-                projectsByStudent.get(row.student_id).push({
-                    id: row.id,
-                    _id: row.id,
+                projectsByStudent.get(sId).push({
+                    id: pId,
+                    _id: pId,
                     title: row.title,
                     name: row.title,
                     status,
@@ -560,17 +590,23 @@ export const getAdminStudents = async (req, res, next) => {
                 tasksByStudent.set(row.student_id, {
                     total: totalT,
                     completed: compT,
+                    totalTasks: totalT,
+                    completedTasks: compT,
                     pending: Number(row.pending_tasks || 0),
                     completionRate: totalT > 0 ? Math.round((compT / totalT) * 100) : 0,
                 });
             }
 
-            const formatted = students.map((u) => {
+            const formatted = uniqueStudents.map((u) => {
                 const teams = projectsByStudent.get(u.id) || [];
                 const primaryTeam = teams[0] || null;
                 const assignedMentor = u.mentor_id
                     ? { id: u.mentor_id, name: u.mentor_name, email: u.mentor_email }
                     : primaryTeam?.mentor || null;
+
+                const projectCount = teams.length;
+                const leaderProjectsCount = teams.filter((t) => t.isLeader).length;
+                const isLeaderAny = leaderProjectsCount > 0;
 
                 return {
                     ...safeUser(u),
@@ -579,7 +615,12 @@ export const getAdminStudents = async (req, res, next) => {
                     team: primaryTeam,
                     project: primaryTeam,
                     teams,
-                    taskProgress: tasksByStudent.get(u.id) || { total: 0, completed: 0, pending: 0, completionRate: 0 },
+                    projects: teams,
+                    projectCount,
+                    teamsCount: projectCount,
+                    leaderProjectsCount,
+                    isLeader: isLeaderAny,
+                    taskProgress: tasksByStudent.get(u.id) || { total: 0, completed: 0, totalTasks: 0, completedTasks: 0, pending: 0, completionRate: 0 },
                 };
             });
 
@@ -633,7 +674,7 @@ export const getAdminStudentById = async (req, res, next) => {
                             o.name AS owner_name, o.email AS owner_email,
                             m.name AS mentor_name, m.email AS mentor_email,
                             (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
-                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND t.status = 'Completed') AS completed_tasks
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(t.status)) IN ('completed', 'done')) AS completed_tasks
                      FROM projects p
                      LEFT JOIN project_members pm ON pm.project_id = p.id
                      LEFT JOIN users o ON o.id = p.owner_id
@@ -650,7 +691,7 @@ export const getAdminStudentById = async (req, res, next) => {
                      LEFT JOIN projects p ON p.id = t.project_id
                      LEFT JOIN users u_a ON u_a.id = t.assigned_to
                      LEFT JOIN users u_c ON u_c.id = t.created_by
-                     WHERE t.assigned_to = $1
+                     WHERE t.assigned_to = $1 AND (p.status != 'Archived' OR p.status IS NULL)
                      ORDER BY t.created_at DESC
                      LIMIT 100;`,
                     [studentId]
@@ -673,7 +714,7 @@ export const getAdminStudentById = async (req, res, next) => {
             );
 
             const tasks = tasksRes.rows.map((t) => formatTask(t));
-            const completedTasks = tasks.filter((t) => t.status === "Completed").length;
+            const completedTasks = tasks.filter((t) => ["completed", "done"].includes(String(t.status || "").trim().toLowerCase())).length;
             const totalTasks = tasks.length;
 
             const teams = projectsRes.rows.map((p) => {
@@ -725,10 +766,12 @@ export const getAdminStudentById = async (req, res, next) => {
                 taskProgress: {
                     total: totalTasks,
                     completed: completedTasks,
-                    pending: totalTasks - completedTasks,
-                    todo: tasks.filter((t) => t.status === "Todo").length,
-                    inProgress: tasks.filter((t) => t.status === "In Progress").length,
-                    inReview: tasks.filter((t) => t.status === "In Review").length,
+                    totalTasks,
+                    completedTasks,
+                    pending: Math.max(0, totalTasks - completedTasks),
+                    todo: tasks.filter((t) => String(t.status || "").trim().toLowerCase() === "todo").length,
+                    inProgress: tasks.filter((t) => String(t.status || "").trim().toLowerCase() === "in progress").length,
+                    inReview: tasks.filter((t) => String(t.status || "").trim().toLowerCase() === "in review").length,
                     completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
                 },
                 activityHistory: activitiesRes.rows.map(formatActivityRow),
@@ -1817,12 +1860,18 @@ export const reassignProjectMentor = async (req, res, next) => {
         const updatedProject = rows[0];
         const io = req.app.get("io");
 
-        // Evict previous mentor from project official chat room if changed
-        if (io && previousMentorId && Number(previousMentorId) !== Number(nextMentorId)) {
-            io.in(`user:${previousMentorId}`).socketsLeave([
-                `project_${projectId}_official`,
-                `project_${projectId}_unofficial`,
-            ]);
+        // Evict previous mentor from project official chat room if changed and unassign project tasks
+        if (previousMentorId && Number(previousMentorId) !== Number(nextMentorId)) {
+            await pool.query(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+                [projectId, previousMentorId]
+            );
+            if (io) {
+                io.in(`user:${previousMentorId}`).socketsLeave([
+                    `project_${projectId}_official`,
+                    `project_${projectId}_unofficial`,
+                ]);
+            }
         }
 
         const timestamp = new Date().toISOString();
@@ -2195,6 +2244,17 @@ export const transitionUserRole = async (req, res, next) => {
         revokeUserTokens(targetUserId);
         invalidateUserCache();
 
+        // Non-blocking account approval email notification
+        if (wasPendingApproval && updatedUser?.email) {
+            sendAccountApprovalEmail({
+                to: updatedUser.email,
+                name: updatedUser.name,
+                role: requestedRole,
+            }).catch((mailErr) => {
+                console.warn("[Admin User Approval Email Notice]", mailErr.message);
+            });
+        }
+
         if (io) {
             io.in(`user:${targetUserId}`).disconnectSockets(true);
             for (const n of createdStudentNotifs) {
@@ -2345,6 +2405,47 @@ export const createAdminAnnouncement = async (req, res, next) => {
 
         invalidateAllCaches();
 
+        // Non-blocking announcement email dispatch to target recipients
+        (async () => {
+            try {
+                let recQuery = "";
+                let queryParams = [];
+
+                if (parsedProjectId) {
+                    recQuery = `
+                        SELECT DISTINCT u.email FROM users u
+                        WHERE u.is_active = TRUE AND u.email IS NOT NULL AND (
+                            u.id IN (SELECT owner_id FROM projects WHERE id = $1 AND owner_id IS NOT NULL)
+                            OR u.id IN (SELECT user_id FROM project_members WHERE project_id = $1)
+                        )
+                        LIMIT 500;
+                    `;
+                    queryParams = [parsedProjectId];
+                } else if (rawTargetRole === "student") {
+                    recQuery = "SELECT email FROM users WHERE is_active = TRUE AND role = 'student' AND email IS NOT NULL LIMIT 500;";
+                } else if (rawTargetRole === "mentor") {
+                    recQuery = "SELECT email FROM users WHERE is_active = TRUE AND role IN ('mentor', 'senior_mentor', 'faculty_mentor') AND email IS NOT NULL LIMIT 500;";
+                } else {
+                    recQuery = "SELECT email FROM users WHERE is_active = TRUE AND email IS NOT NULL LIMIT 500;";
+                }
+
+                const recRes = await pool.query(recQuery, queryParams);
+                const emails = recRes.rows.map((r) => r.email).filter(Boolean);
+
+                if (emails.length > 0) {
+                    await sendAnnouncementEmail({
+                        to: emails,
+                        title: inserted.title,
+                        content: inserted.content,
+                        authorName: req.user.name,
+                        authorRole: req.user.role || "Administrator",
+                    });
+                }
+            } catch (mailErr) {
+                console.warn("[Admin Announcement Email Notice]", mailErr.message);
+            }
+        })();
+
         const formatted = formatAnnouncementRow({
             ...inserted,
             creator_name: req.user.name,
@@ -2393,6 +2494,451 @@ export const deleteAdminAnnouncement = async (req, res, next) => {
             success: true,
             message: "Announcement deleted successfully",
             id: announcementId,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * GET /api/admin/users
+ * Directory of all users across roles (Student, Mentor, Director, Coordinator, Admin).
+ */
+export const getAdminUsers = async (req, res, next) => {
+    try {
+        const { role, search, status, limit = 100, page = 1 } = req.query;
+        const parsedLimit = Math.min(200, Math.max(1, parsePositiveInt(limit) || 50));
+        const parsedPage = Math.max(1, parsePositiveInt(page) || 1);
+        const offset = (parsedPage - 1) * parsedLimit;
+
+        let query = `
+            SELECT id, name, email, roll_no, role, phone, mentor_id,
+                   role_classified, is_verified, is_active, created_at
+            FROM users
+            WHERE 1=1
+        `;
+        const params = [];
+        let paramIdx = 1;
+
+        if (role && role !== "all") {
+            query += ` AND LOWER(role) = LOWER($${paramIdx})`;
+            params.push(role.trim());
+            paramIdx++;
+        }
+
+        if (status && status !== "all") {
+            const isActive = status === "active";
+            query += ` AND is_active = $${paramIdx}`;
+            params.push(isActive);
+            paramIdx++;
+        }
+
+        if (search && search.trim()) {
+            const pattern = `%${escapeLikePattern(search.trim())}%`;
+            query += ` AND (name ILIKE $${paramIdx} OR email ILIKE $${paramIdx} OR roll_no ILIKE $${paramIdx})`;
+            params.push(pattern);
+            paramIdx++;
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1};`;
+        params.push(parsedLimit, offset);
+
+        const { rows: users } = await pool.query(query, params);
+
+        return res.status(200).json({
+            success: true,
+            count: users.length,
+            users: users.map(safeUser),
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * DELETE /api/admin/users/:id
+ * Hardened Admin User Deletion (Students, Mentors, Directors, etc.)
+ * Strictly transactional with foreign key cleanup, self-lockout prevention, and audit logging.
+ */
+export const deleteAdminUser = async (req, res, next) => {
+    const client = await pool.connect();
+    try {
+        const targetUserId = parsePositiveInt(req.params.id);
+        if (!targetUserId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid target user ID is required",
+            });
+        }
+
+        const adminId = Number(req.user.id);
+
+        // Security Guard: Prevent accidental self-lockout
+        if (targetUserId === adminId) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot delete your own administrator account. Accidental self-lockout prevented.",
+            });
+        }
+
+        // Fetch target user with row locking
+        const { rows: userRows } = await client.query(
+            "SELECT id, name, email, role, roll_no, is_active FROM users WHERE id = $1 FOR UPDATE;",
+            [targetUserId]
+        );
+
+        if (userRows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Target user not found or has already been deleted.",
+            });
+        }
+
+        const targetUser = userRows[0];
+
+        await client.query("BEGIN");
+
+        // 1. Reassign or archive projects owned by target user
+        const { rows: ownedProjects } = await client.query(
+            "SELECT id, title FROM projects WHERE owner_id = $1;",
+            [targetUserId]
+        );
+
+        for (const proj of ownedProjects) {
+            const { rows: candidateMembers } = await client.query(
+                "SELECT user_id FROM project_members WHERE project_id = $1 AND user_id != $2 ORDER BY user_id ASC LIMIT 1;",
+                [proj.id, targetUserId]
+            );
+
+            if (candidateMembers.length > 0) {
+                const newOwnerId = candidateMembers[0].user_id;
+                await client.query(
+                    "UPDATE projects SET owner_id = $1, updated_at = NOW() WHERE id = $2;",
+                    [newOwnerId, proj.id]
+                );
+                await client.query(
+                    "UPDATE project_members SET role = 'leader' WHERE project_id = $1 AND user_id = $2;",
+                    [proj.id, newOwnerId]
+                );
+            } else {
+                await client.query(
+                    "UPDATE projects SET status = 'Archived', owner_id = NULL, is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW() WHERE id = $1;",
+                    [proj.id]
+                );
+                await client.query("DELETE FROM project_stars WHERE project_id = $1;", [proj.id]);
+            }
+        }
+
+        // 2. Clear mentor assignments from projects and students
+        await client.query(
+            "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE mentor_id = $1;",
+            [targetUserId]
+        );
+        await client.query(
+            "UPDATE users SET mentor_id = NULL WHERE mentor_id = $1;",
+            [targetUserId]
+        );
+
+        // 3. Unassign tasks assigned to or created by target user
+        await client.query(
+            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE assigned_to = $1;",
+            [targetUserId]
+        );
+        await client.query(
+            "UPDATE tasks SET created_by = NULL, updated_at = NOW() WHERE created_by = $1;",
+            [targetUserId]
+        );
+
+        // 4. Clean invitations referencing target user
+        await client.query(
+            "DELETE FROM invitations WHERE recipient_id = $1 OR sender_id = $1 OR recipient_email = $2;",
+            [targetUserId, targetUser.email]
+        );
+
+        // 5. Clean team memberships, stars, notifications, messages, announcements
+        await client.query("DELETE FROM project_members WHERE user_id = $1;", [targetUserId]);
+        await client.query(`
+            UPDATE projects
+            SET status = 'Archived', is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW()
+            WHERE owner_id IS NULL
+              AND status != 'Archived'
+              AND id NOT IN (SELECT project_id FROM project_members);
+        `);
+        await client.query(`
+            DELETE FROM project_stars
+            WHERE project_id IN (
+                SELECT id FROM projects WHERE status = 'Archived' OR is_on_leaderboard = FALSE
+            );
+        `);
+        await client.query("DELETE FROM project_stars WHERE user_id = $1;", [targetUserId]);
+        await client.query("DELETE FROM notifications WHERE user_id = $1;", [targetUserId]);
+        await client.query("DELETE FROM messages WHERE sender_id = $1;", [targetUserId]);
+        await client.query("UPDATE announcements SET created_by = NULL WHERE created_by = $1;", [targetUserId]);
+
+        // 6. Delete the user record
+        await client.query("DELETE FROM users WHERE id = $1;", [targetUserId]);
+
+        // 7. Structured audit logging (zero sensitive secrets logged)
+        await logActivity({
+            projectId: null,
+            userId: adminId,
+            action: "ADMIN_USER_DELETED",
+            description: `Administrator ${req.user.name} deleted user "${targetUser.name}" (${targetUser.email}, Role: ${targetUser.role}, ID: ${targetUserId})`,
+            entityType: "User",
+            entityId: targetUserId,
+            metadata: {
+                adminId,
+                targetUserId,
+                targetRole: targetUser.role,
+                targetEmail: targetUser.email,
+                targetName: targetUser.name,
+                deletedAt: new Date().toISOString(),
+            },
+            client,
+        });
+
+        await client.query("COMMIT");
+
+        // Revoke tokens and wipe micro-caches
+        invalidateUserCache(targetUserId);
+        revokeUserTokens(targetUserId);
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: `User "${targetUser.name}" (${targetUser.role || "student"}) deleted successfully.`,
+            id: targetUserId,
+        });
+    } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        next(error);
+    } finally {
+        client.release();
+    }
+};
+
+/**
+ * POST /api/admin/teams/:projectId/members
+ * Admin Direct Team Member Enrollment (No Invite Required).
+ */
+export const addAdminTeamMember = async (req, res, next) => {
+    try {
+        const projectId = parsePositiveInt(req.params.projectId);
+        const { userId, user_id, role = "member" } = req.body;
+        const targetUserId = parsePositiveInt(userId ?? user_id);
+
+        if (!projectId || !targetUserId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid projectId and userId are required.",
+            });
+        }
+
+        const projRes = await pool.query(
+            "SELECT id, title, owner_id FROM projects WHERE id = $1;",
+            [projectId]
+        );
+        if (projRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Project not found." });
+        }
+        const project = projRes.rows[0];
+
+        if (Number(project.owner_id) === targetUserId) {
+            return res.status(400).json({
+                success: false,
+                message: "User is already the Team Leader of this project.",
+            });
+        }
+
+        const userRes = await pool.query(
+            "SELECT id, name, email, role, is_active FROM users WHERE id = $1;",
+            [targetUserId]
+        );
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Target user not found." });
+        }
+        const targetUser = userRes.rows[0];
+        if (!targetUser.is_active) {
+            return res.status(400).json({ success: false, message: "Cannot add an inactive user to a project team." });
+        }
+
+        // Check if user is already a squad member
+        const existingMember = await pool.query(
+            "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2;",
+            [projectId, targetUserId]
+        );
+        if (existingMember.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `"${targetUser.name}" is already a member of this team.`,
+            });
+        }
+
+        // Direct enrollment without token/invite flow
+        await pool.query(
+            `INSERT INTO project_members (project_id, user_id, role)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (project_id, user_id) DO NOTHING;`,
+            [projectId, targetUserId, String(role || "member").toLowerCase().trim()]
+        );
+
+        // Mark any pending invitations for this project and user as accepted
+        await pool.query(
+            `UPDATE invitations
+             SET status = 'Accepted', updated_at = NOW()
+             WHERE project_id = $1 AND (recipient_id = $2 OR recipient_email = $3) AND status = 'Pending';`,
+            [projectId, targetUserId, targetUser.email]
+        ).catch(() => {});
+
+        // Notification to newly added member
+        await createNotification({
+            userId: targetUserId,
+            title: "Added to Team",
+            message: `Administrator ${req.user.name} added you directly to "${project.title}".`,
+            type: "team",
+            io: req.app.get("io"),
+        });
+
+        // Structured audit log
+        await logActivity({
+            projectId,
+            userId: req.user.id,
+            action: "ADMIN_MEMBER_ADDED",
+            description: `Admin ${req.user.name} directly added "${targetUser.name}" (${targetUser.email}) to "${project.title}"`,
+            entityType: "ProjectMember",
+            entityId: targetUserId,
+            metadata: { adminId: req.user.id, projectId, targetUserId },
+        });
+
+        invalidateAllCaches();
+
+        return res.status(201).json({
+            success: true,
+            message: `"${targetUser.name}" added to team successfully.`,
+            member: {
+                id: targetUser.id,
+                name: targetUser.name,
+                email: targetUser.email,
+                role: role || "member",
+            },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * DELETE /api/admin/teams/:projectId/members/:memberId
+ * Admin Direct Team Member Removal.
+ */
+export const removeAdminTeamMember = async (req, res, next) => {
+    try {
+        const projectId = parsePositiveInt(req.params.projectId);
+        const memberId = parsePositiveInt(req.params.memberId);
+
+        if (!projectId || !memberId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid projectId and memberId are required.",
+            });
+        }
+
+        const projRes = await pool.query(
+            "SELECT id, title, owner_id FROM projects WHERE id = $1;",
+            [projectId]
+        );
+        if (projRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Project not found." });
+        }
+        const project = projRes.rows[0];
+
+        if (Number(project.owner_id) === memberId) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot remove the Team Leader from the project. Transfer ownership first.",
+            });
+        }
+
+        const userRes = await pool.query(
+            "SELECT id, name, email FROM users WHERE id = $1;",
+            [memberId]
+        );
+        const memberName = userRes.rows[0]?.name || `User #${memberId}`;
+
+        const delRes = await pool.query(
+            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING user_id;",
+            [projectId, memberId]
+        );
+
+        if (delRes.rowCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "User is not a member of this project.",
+            });
+        }
+
+        // Unassign active project tasks for this member
+        await pool.query(
+            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+            [projectId, memberId]
+        );
+
+        // Audit log
+        await logActivity({
+            projectId,
+            userId: req.user.id,
+            action: "ADMIN_MEMBER_REMOVED",
+            description: `Admin ${req.user.name} removed "${memberName}" from "${project.title}"`,
+            entityType: "ProjectMember",
+            entityId: memberId,
+            metadata: { adminId: req.user.id, projectId, memberId },
+        });
+
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: `"${memberName}" removed from team successfully.`,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * 20. DELETE /api/admin/teams/:projectId or /api/admin/projects/:projectId
+ * Full transactional cleanup of project and all dependent records (tasks, members, invites)
+ */
+export const deleteAdminProject = async (req, res, next) => {
+    try {
+        const rawId = req.params.projectId ?? req.params.id;
+        const projectId = parsePositiveInt(rawId);
+        if (!projectId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID is required",
+            });
+        }
+
+        const io = req.app.get("io");
+        const result = await purgeProjectAndDependents({
+            projectId,
+            user: req.user,
+            io,
+            bypassOwnerCheck: true, // Caller is guaranteed admin by admin.routes.js RBAC
+        });
+
+        if (!result.success) {
+            return res.status(result.status || 400).json({
+                success: false,
+                message: result.message,
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Project "${result.project?.title}" and all associated tasks, squad members, and invitations permanently deleted`,
+            project: result.project,
         });
     } catch (error) {
         next(error);

@@ -48,7 +48,10 @@ function formatDate(dateString) {
 export default function Profile() {
   const { user, updateUser } = useAuth();
 
-  const isStudent = getEffectiveRole(user) === "student";
+  const effectiveRole = getEffectiveRole(user);
+  const isStudent = effectiveRole === "student";
+  const isMentor = effectiveRole === "mentor";
+  const canEditEnrollment = isStudent || isMentor;
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -184,13 +187,21 @@ export default function Profile() {
     }
 
     const cleanRollNo = rollNo.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-    if (isStudent && cleanRollNo) {
+    if (canEditEnrollment && cleanRollNo) {
       if (!/^[A-Z0-9]+$/.test(cleanRollNo)) {
-        setError("Roll number must be alphanumeric (uppercase letters and numbers only).");
+        setError(
+          isMentor
+            ? "Enrollment number must be alphanumeric (uppercase letters and numbers only)."
+            : "Roll number must be alphanumeric (uppercase letters and numbers only)."
+        );
         return;
       }
       if (cleanRollNo.length > 50) {
-        setError("Roll Number cannot exceed 50 characters.");
+        setError(
+          isMentor
+            ? "Enrollment Number cannot exceed 50 characters."
+            : "Roll Number cannot exceed 50 characters."
+        );
         return;
       }
     }
@@ -204,7 +215,7 @@ export default function Profile() {
         name: cleanName,
       };
 
-      if (isStudent) {
+      if (canEditEnrollment) {
         payload.roll_no = cleanRollNo || null;
       }
 
@@ -252,7 +263,7 @@ export default function Profile() {
   const hasChanges =
     Boolean(initialData) &&
     (name.trim() !== (initialData.name || "").trim() ||
-      (isStudent && rollNo.trim() !== (initialData.rollNo || "").trim()));
+      (canEditEnrollment && rollNo.trim() !== (initialData.rollNo || "").trim()));
 
   const userInitials = getInitials(name || user?.name || "User");
 
@@ -325,9 +336,9 @@ export default function Profile() {
                   <span className="rounded-full border border-[#2E8B63]/25 bg-[#E3F3EB] dark:bg-[#13291E] px-3 py-0.5 text-xs font-semibold text-[#1E6B4B] dark:text-[#6EE7B7]">
                     Verified Account
                   </span>
-                  {(rollNo || user?.roll_no || user?.rollNumber) && (
+                  {canEditEnrollment && (rollNo || user?.roll_no || user?.rollNumber) && (
                     <span className="rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-3 py-0.5 text-xs font-mono font-bold text-[#141A18] dark:text-slate-200">
-                      Roll: {rollNo || user?.roll_no || user?.rollNumber}
+                      {isMentor ? "Enrollment:" : "Roll:"} {rollNo || user?.roll_no || user?.rollNumber}
                     </span>
                   )}
                 </div>
@@ -354,6 +365,8 @@ export default function Profile() {
               <p className="mt-1 text-xs text-[#5C6B66] dark:text-[#94A89D]">
                 {isStudent
                   ? "Update your personal details and academic roll number."
+                  : isMentor
+                  ? "Update your personal details and faculty enrollment number."
                   : "Update your personal display name."}
               </p>
 
@@ -390,11 +403,11 @@ export default function Profile() {
                   />
                 </div>
 
-                {isStudent && (
+                {canEditEnrollment && (
                   <div>
                     <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300">
                       <GraduationCap size={14} className="text-[#2E8B63] dark:text-[#4ADE80]" />
-                      Roll Number
+                      {isMentor ? "Enrollment Number" : "Roll Number"}
                     </label>
 
                     <input
@@ -405,7 +418,7 @@ export default function Profile() {
                       }
                       maxLength={30}
                       autoCapitalize="characters"
-                      placeholder="e.g. 25ETCCS149"
+                      placeholder={isMentor ? "e.g. EMP1042 or EN12345" : "e.g. 25ETCCS149"}
                       className="w-full rounded-2xl border border-[#D5E0D8] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-4 py-3 text-sm font-mono font-medium text-[#141A18] dark:text-slate-100 shadow-2xs outline-none transition focus:border-[#2E8B63] dark:focus:border-[#22C55E] focus:ring-2 focus:ring-[#2E8B63]/15"
                     />
                   </div>
@@ -538,6 +551,17 @@ export default function Profile() {
                   <span className="font-medium text-[#5C6662] dark:text-[#94A89D]">Affiliation</span>
                   <span className="font-bold text-[#141A18] dark:text-slate-100">Techno NJR</span>
                 </div>
+
+                {canEditEnrollment && (rollNo || user?.roll_no || user?.rollNumber) && (
+                  <div className="flex items-center justify-between border-b border-[#E2DFD5] dark:border-[#2D362B] pb-2.5">
+                    <span className="font-medium text-[#5C6662] dark:text-[#94A89D]">
+                      {isMentor ? "Enrollment No." : "Roll No."}
+                    </span>
+                    <span className="font-mono font-bold text-[#141A18] dark:text-slate-100">
+                      {rollNo || user?.roll_no || user?.rollNumber}
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between border-b border-[#E2DFD5] dark:border-[#2D362B] pb-2.5">
                   <span className="font-medium text-[#5C6662] dark:text-[#94A89D]">

@@ -48,13 +48,13 @@ export const getChatMessages = async (req, res, next) => {
         // Check project access (cached via bounded 3s micro cache, auto-invalidated on writes)
         const project = await projectAccessCache.getOrSet(`proj:${projectId}`, async () => {
             const projRes = await pool.query(
-                "SELECT id, owner_id, mentor_id FROM projects WHERE id = $1",
+                "SELECT id, owner_id, mentor_id, status FROM projects WHERE id = $1",
                 [projectId]
             );
             return projRes.rows[0] || null;
         });
 
-        if (!project) {
+        if (!project || (!isAdmin && project.status === "Archived")) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
@@ -185,11 +185,11 @@ export const sendChatMessage = async (req, res, next) => {
 
         // Check project access
         const projRes = await pool.query(
-            "SELECT id, owner_id, mentor_id FROM projects WHERE id = $1",
+            "SELECT id, owner_id, mentor_id, status FROM projects WHERE id = $1",
             [projectId]
         );
 
-        if (projRes.rows.length === 0) {
+        if (projRes.rows.length === 0 || (!isAdmin && projRes.rows[0].status === "Archived")) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",

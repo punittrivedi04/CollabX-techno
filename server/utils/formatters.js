@@ -140,6 +140,7 @@ export const formatProject = (p, members = [], owner = null) => {
 
 export const formatTask = (t, project = null, assignedTo = null, createdBy = null) => {
     if (!t) return null;
+    const projectOwnerId = t.project_owner_id || (project ? (project.owner_id || project.owner?.id) : null) || null;
     return {
         ...t,
         id: t.id,
@@ -148,8 +149,10 @@ export const formatTask = (t, project = null, assignedTo = null, createdBy = nul
         description: t.description || "",
         status: t.status || "Todo",
         priority: t.priority || "Medium",
-        project: project || t.project || (t.project_id ? { id: t.project_id, _id: t.project_id, name: t.project_title || `Project ${t.project_id}`, title: t.project_title || `Project ${t.project_id}` } : null),
+        project: project || t.project || (t.project_id ? { id: t.project_id, _id: t.project_id, name: t.project_title || `Project ${t.project_id}`, title: t.project_title || `Project ${t.project_id}`, owner_id: projectOwnerId } : null),
         projectId: t.project_id,
+        project_owner_id: projectOwnerId,
+        projectOwnerId: projectOwnerId,
         assignedTo: assignedTo || t.assignedTo || (t.assigned_to ? { id: t.assigned_to, _id: t.assigned_to, name: t.assignee_name || "Assignee", email: t.assignee_email || "" } : null),
         createdBy: createdBy || t.createdBy || (t.created_by ? { id: t.created_by, _id: t.created_by, name: t.creator_name || "Creator", email: t.creator_email || "" } : null),
         dueDate: t.due_date,

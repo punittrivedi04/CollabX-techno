@@ -1,12 +1,19 @@
+import crypto from "crypto";
 import pool from "../config/db.js";
 import { parsePositiveInt, pickAllowedFields } from "../utils/formatters.js";
 import { isDirector } from "../middleware/directorGuard.js";
 import { invalidateAllCaches } from "../utils/microCache.js";
 import logActivity from "../utils/activityLogger.js";
+import { sendInvitationEmail } from "../utils/sendEmail.js";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ALLOWED_MEMBER_ROLES = new Set(["member"]);
 const MENTOR_ROLES = new Set(["mentor", "faculty"]);
+
+const getBaseClientUrl = (req) => {
+    const raw = process.env.CLIENT_URL || req?.get("origin") || "http://localhost:5173";
+    return String(raw).split(",")[0].trim().replace(/\/+$/, "");
+};
 
 const evictUserFromProjectRooms = (req, projectId, targetUserId) => {
     const io = req.app.get("io");
@@ -23,7 +30,9 @@ export const getProjectTeam = async (req, res, next) => {
         const projectId = parsePositiveInt(req.params.projectId);
         const userId = req.user.id;
         const role = String(req.user.role || "").toLowerCase();
-        const isAdmin = role === "admin" || role === "coordinator" || isDirector(req.user);
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isDirectorUser = role === "director" || isDirector(req.user);
+        const hasOversight = isAdmin || isDirectorUser;
 
         if (!projectId) {
             return res.status(400).json({
@@ -59,10 +68,17 @@ export const getProjectTeam = async (req, res, next) => {
         const isOwner = Number(project.owner_id) === Number(userId);
         const isMentor = Number(project.mentor_id) === Number(userId);
 
-        if (!isAdmin && !isOwner && !isMember && !isMentor) {
+        if (!hasOversight && !isOwner && !isMember && !isMentor) {
             return res.status(403).json({
                 success: false,
                 message: "You do not have access to view this project team",
+            });
+        }
+
+        if (!hasOversight && project.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project team not found",
             });
         }
 
@@ -103,31 +119,57 @@ export const getProjectTeam = async (req, res, next) => {
             FROM invitations i
             LEFT JOIN users u ON i.sender_id = u.id
             LEFT JOIN users r ON i.recipient_id = r.id
-            WHERE i.project_id = $1 AND i.status = 'Pending'
+            WHERE i.project_id = $1 AND i.status IN ('Pending', 'Expired')
             ORDER BY i.created_at DESC;
         `, [projectId]);
 
-        const formattedInvites = invitesRes.rows.map((i) => ({
-            id: i.id,
-            _id: i.id,
-            recipientEmail: i.recipient_email,
-            recipient: {
-                id: i.recipient_id || null,
-                _id: i.recipient_id || null,
-                name: i.recipient_name || i.recipient_email,
-                email: i.recipient_user_email || i.recipient_email,
-                roll_no: i.recipient_roll_no || "",
-            },
-            role: i.role || "member",
-            status: i.status,
-            sender: {
-                id: i.sender_id,
-                _id: i.sender_id,
-                name: i.sender_name,
-                email: i.sender_email,
-            },
-            createdAt: i.created_at,
-        }));
+        const cleanBaseUrl = getBaseClientUrl(req);
+
+        const formattedInvites = await Promise.all(
+            invitesRes.rows.map(async (i) => {
+                let token = i.token;
+                if (!token) {
+                    token = crypto.randomBytes(32).toString("hex");
+                    await pool.query("UPDATE invitations SET token = $1 WHERE id = $2", [token, i.id]).catch(() => {});
+                }
+
+                const expiresAt = i.expires_at || new Date(new Date(i.created_at).getTime() + 48 * 60 * 60 * 1000).toISOString();
+                const isExpired = i.status === "Expired" || (expiresAt && new Date(expiresAt) <= new Date());
+                const effectiveStatus = isExpired ? "Expired" : (i.status || "Pending");
+
+                if (isExpired && i.status === "Pending") {
+                    pool.query("UPDATE invitations SET status = 'Expired' WHERE id = $1", [i.id]).catch(() => {});
+                }
+
+                const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
+
+                return {
+                    id: i.id,
+                    _id: i.id,
+                    recipientEmail: i.recipient_email,
+                    recipient: {
+                        id: i.recipient_id || null,
+                        _id: i.recipient_id || null,
+                        name: i.recipient_name || i.recipient_email,
+                        email: i.recipient_user_email || i.recipient_email,
+                        roll_no: i.recipient_roll_no || "",
+                    },
+                    role: i.role || "member",
+                    status: effectiveStatus,
+                    isExpired,
+                    token,
+                    invitationUrl,
+                    expiresAt,
+                    sender: {
+                        id: i.sender_id,
+                        _id: i.sender_id,
+                        name: i.sender_name,
+                        email: i.sender_email,
+                    },
+                    createdAt: i.created_at,
+                };
+            })
+        );
 
         const mentorObj = project.mentor_id
             ? {
@@ -211,7 +253,16 @@ export const sendInvitation = async (req, res, next) => {
         }
 
         const project = projRes.rows[0];
-        if (role === "mentor" || role === "faculty" || (!isAdmin && Number(project.owner_id) !== Number(userId))) {
+        let isLeader = Number(project.owner_id) === Number(userId);
+        if (!isLeader && !isAdmin) {
+            const leaderCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 AND LOWER(role) = 'leader';",
+                [projectId, userId]
+            );
+            isLeader = leaderCheck.rows.length > 0;
+        }
+
+        if (role === "mentor" || role === "faculty" || (!isAdmin && !isLeader)) {
             return res.status(403).json({
                 success: false,
                 message: "Forbidden. Only the current Team Leader or an Administrator can add or invite squad members.",
@@ -279,11 +330,12 @@ export const sendInvitation = async (req, res, next) => {
                 });
             }
 
+            const token = crypto.randomBytes(32).toString("hex");
             const insertRes = await pool.query(
-                `INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, created_at)
-                 VALUES ($1, $2, $3, $4, 'mentor', 'Pending', NOW())
+                `INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, token, expires_at, created_at)
+                 VALUES ($1, $2, $3, $4, 'mentor', 'Pending', $5, NOW() + INTERVAL '48 hours', NOW())
                  RETURNING *;`,
-                [projectId, mentorRow.email.toLowerCase(), mentorRow.id, userId]
+                [projectId, mentorRow.email.toLowerCase(), mentorRow.id, userId, token]
             );
 
             const notifRes = await pool.query(
@@ -292,7 +344,7 @@ export const sendInvitation = async (req, res, next) => {
                  RETURNING id, title, message, type, is_read, created_at;`,
                 [
                     mentorRow.id,
-                    `${req.user.name} invited you to mentor project "${project.title}". Accept or decline from your Mentor Portal.`,
+                    `${req.user.name} invited you to mentor project "${project.title}". Accept or decline from your Mentor Portal within 48 hours.`,
                 ]
             );
 
@@ -314,7 +366,7 @@ export const sendInvitation = async (req, res, next) => {
                 projectId,
                 userId,
                 action: "MENTOR_INVITED",
-                description: `${req.user.name} sent a mentor invitation to ${mentorRow.name} for "${project.title}"`,
+                description: `${req.user.name} sent a mentor invitation to ${mentorRow.name} for "${project.title}" (valid for 48 hours)`,
                 entityType: "Invitation",
                 entityId: insertRes.rows[0].id,
                 metadata: { mentorId: mentorRow.id, mentorName: mentorRow.name },
@@ -322,11 +374,32 @@ export const sendInvitation = async (req, res, next) => {
 
             invalidateAllCaches();
 
+            const baseUrl = process.env.CLIENT_URL || req.get("origin") || "http://localhost:5173";
+            const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+            const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
+
+            // Non-blocking mentor invitation email delivery
+            if (mentorRow?.email) {
+                sendInvitationEmail({
+                    to: mentorRow.email,
+                    inviterName: req.user.name,
+                    projectName: project.title,
+                    invitationUrl,
+                    role: "mentor",
+                }).catch((mailErr) => {
+                    console.warn("[Mentor Invite Email Notice]", mailErr.message);
+                });
+            }
+
             return res.status(201).json({
                 success: true,
-                message: `Mentor invitation sent to ${mentorRow.name}. They will be assigned once they accept.`,
+                message: `Mentor invitation sent to ${mentorRow.name}. They will be assigned once they accept (valid for 48 hours).`,
                 invitation: {
                     ...insertRes.rows[0],
+                    token,
+                    invitationUrl,
+                    expiresAt: insertRes.rows[0].expires_at,
+                    isExpired: false,
                     recipient: { id: mentorRow.id, name: mentorRow.name, email: mentorRow.email },
                 },
             });
@@ -373,38 +446,87 @@ export const sendInvitation = async (req, res, next) => {
             }
         }
 
-        // Check existing pending invitation
-        const pendingCheck = await pool.query(
-            "SELECT id FROM invitations WHERE project_id = $1 AND LOWER(recipient_email) = LOWER($2) AND status = 'Pending'",
+        // Check existing pending / expired invitation
+        const existingCheck = await pool.query(
+            "SELECT id, status, expires_at FROM invitations WHERE project_id = $1 AND LOWER(recipient_email) = LOWER($2) AND status IN ('Pending', 'Expired')",
             [projectId, cleanEmail]
         );
-        if (pendingCheck.rows.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: "An invitation is already pending for this email address",
-            });
-        }
 
-        const insertRes = await pool.query(`
-            INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, created_at)
-            VALUES ($1, $2, $3, $4, 'member', 'Pending', NOW())
-            RETURNING *;
-        `, [projectId, cleanEmail, recipientUser ? recipientUser.id : null, userId]);
+        const token = crypto.randomBytes(32).toString("hex");
+        let savedInvite = null;
+
+        if (existingCheck.rows.length > 0) {
+            const existing = existingCheck.rows[0];
+            const isExistingExpired = existing.status === "Expired" || (existing.expires_at && new Date(existing.expires_at) <= new Date());
+            if (!isExistingExpired) {
+                return res.status(400).json({
+                    success: false,
+                    message: "An active invitation is already pending for this email address (valid for 48 hours). You can re-send or copy the existing invite link.",
+                });
+            }
+
+            // Existing invitation has expired -> renew it in place with a fresh token and 48-hour window
+            const renewRes = await pool.query(`
+                UPDATE invitations
+                SET token = $1, status = 'Pending', expires_at = NOW() + INTERVAL '48 hours', created_at = NOW()
+                WHERE id = $2
+                RETURNING *;
+            `, [token, existing.id]);
+            savedInvite = renewRes.rows[0];
+        } else {
+            const insertRes = await pool.query(`
+                INSERT INTO invitations (project_id, recipient_email, recipient_id, sender_id, role, status, token, expires_at, created_at)
+                VALUES ($1, $2, $3, $4, 'member', 'Pending', $5, NOW() + INTERVAL '48 hours', NOW())
+                RETURNING *;
+            `, [projectId, cleanEmail, recipientUser ? recipientUser.id : null, userId, token]);
+            savedInvite = insertRes.rows[0];
+        }
 
         // If recipient user exists, create notification
         if (recipientUser) {
             await pool.query(`
                 INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
                 VALUES ($1, 'Team Invitation', $2, 'invitation', FALSE, NOW())
-            `, [recipientUser.id, `You have been invited to join project ${project.title}`]);
+            `, [recipientUser.id, `You have been invited to join project "${project.title}" (invitation valid for 48 hours).`]);
         }
+
+        await logActivity({
+            projectId,
+            userId,
+            action: "MEMBER_INVITED",
+            description: `${req.user.name} sent an invitation to ${cleanEmail} for "${project.title}" (valid for 48 hours)`,
+            entityType: "Invitation",
+            entityId: savedInvite.id,
+        });
 
         invalidateAllCaches();
 
+        const cleanBaseUrl = getBaseClientUrl(req);
+        const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
+
+        // Non-blocking squad member invitation email delivery
+        if (cleanEmail) {
+            sendInvitationEmail({
+                to: cleanEmail,
+                inviterName: req.user.name,
+                projectName: project.title,
+                invitationUrl,
+                role: "member",
+            }).catch((mailErr) => {
+                console.warn("[Squad Member Invite Email Notice]", mailErr.message);
+            });
+        }
+
         return res.status(201).json({
             success: true,
-            message: "Invitation sent successfully",
-            invitation: insertRes.rows[0],
+            message: "Invitation sent successfully (valid for 48 hours)",
+            invitation: {
+                ...savedInvite,
+                token,
+                invitationUrl,
+                expiresAt: savedInvite.expires_at,
+                isExpired: false,
+            },
         });
     } catch (error) {
         next(error);
@@ -457,7 +579,99 @@ export const cancelInvitation = async (req, res, next) => {
 
         return res.status(200).json({
             success: true,
-            message: "Invitation canceled successfully",
+            message: "Invitation removed successfully",
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// 3b. RE-SEND / RE-INVITE INVITATION (Resets token & 48-hour expiration window)
+export const resendInvitation = async (req, res, next) => {
+    try {
+        const projectId = parsePositiveInt(req.params.projectId);
+        const invitationId = parsePositiveInt(req.params.invitationId);
+        const userId = req.user.id;
+        const role = String(req.user.role || "").toLowerCase();
+        const isAdmin = role === "admin" || role === "coordinator";
+
+        if (!projectId || !invitationId) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid project ID and invitation ID are required",
+            });
+        }
+
+        const { rows } = await pool.query(`
+            SELECT i.id, i.project_id, i.recipient_email, i.recipient_id, i.role, p.owner_id, p.title as project_title
+            FROM invitations i
+            JOIN projects p ON i.project_id = p.id
+            WHERE i.id = $1 AND i.project_id = $2;
+        `, [invitationId, projectId]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Invitation not found",
+            });
+        }
+
+        const inv = rows[0];
+        const isProjectOwner = Number(inv.owner_id) === Number(userId);
+
+        if (!isAdmin && !isProjectOwner) {
+            return res.status(403).json({
+                success: false,
+                message: "Only the project leader or an administrator can re-send invitations",
+            });
+        }
+
+        const token = crypto.randomBytes(32).toString("hex");
+
+        const updateRes = await pool.query(`
+            UPDATE invitations
+            SET token = $1,
+                status = 'Pending',
+                expires_at = NOW() + INTERVAL '48 hours',
+                created_at = NOW()
+            WHERE id = $2 AND project_id = $3
+            RETURNING *;
+        `, [token, invitationId, projectId]);
+
+        const updated = updateRes.rows[0];
+
+        if (inv.recipient_id) {
+            await pool.query(`
+                INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                VALUES ($1, 'Team Invitation Renewed', $2, 'invitation', FALSE, NOW());
+            `, [inv.recipient_id, `Your invitation to join project "${inv.project_title}" has been renewed with a fresh 48-hour link.`]);
+        }
+
+        await logActivity({
+            projectId,
+            userId,
+            action: "INVITATION_RESENT",
+            description: `${req.user.name} renewed the invitation for ${inv.recipient_email} to join "${inv.project_title}" (fresh 48-hour window)`,
+            entityType: "Invitation",
+            entityId: invitationId,
+        });
+
+        invalidateAllCaches();
+
+        const cleanBaseUrl = getBaseClientUrl(req);
+        const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
+
+        return res.status(200).json({
+            success: true,
+            message: "Invitation renewed! A fresh 48-hour link has been generated.",
+            invitation: {
+                ...updated,
+                token,
+                invitationUrl,
+                expiresAt: updated.expires_at,
+                status: "Pending",
+                isExpired: false,
+            },
         });
     } catch (error) {
         next(error);
@@ -470,6 +684,13 @@ export const getMyInvitations = async (req, res, next) => {
         const userId = req.user.id;
         const userEmail = req.user.email;
 
+        // Auto-expire overdue invitations
+        await pool.query(`
+            UPDATE invitations
+            SET status = 'Expired'
+            WHERE status = 'Pending' AND expires_at IS NOT NULL AND expires_at <= NOW();
+        `).catch(() => {});
+
         const { rows } = await pool.query(`
             SELECT i.*, p.title as project_name, u.name as sender_name, u.email as sender_email
             FROM invitations i
@@ -477,6 +698,7 @@ export const getMyInvitations = async (req, res, next) => {
             JOIN users u ON i.sender_id = u.id
             WHERE (i.recipient_id = $1 OR LOWER(i.recipient_email) = LOWER($2))
               AND i.status = 'Pending'
+              AND (i.expires_at IS NULL OR i.expires_at > NOW())
             ORDER BY i.created_at DESC;
         `, [userId, userEmail]);
 
@@ -487,6 +709,7 @@ export const getMyInvitations = async (req, res, next) => {
             sender: { id: i.sender_id, _id: i.sender_id, name: i.sender_name, email: i.sender_email },
             role: i.role,
             status: i.status,
+            expiresAt: i.expires_at,
             createdAt: i.created_at,
         }));
 
@@ -528,6 +751,20 @@ export const acceptInvitation = async (req, res, next) => {
         }
 
         const invitation = rows[0];
+
+        // 48-Hour Expiration Check
+        const isExpired = invitation.status === "Expired" || (invitation.expires_at && new Date(invitation.expires_at) <= new Date());
+        if (isExpired) {
+            if (invitation.status !== "Expired") {
+                await pool.query("UPDATE invitations SET status = 'Expired' WHERE id = $1", [invitation.id]);
+            }
+            return res.status(400).json({
+                success: false,
+                message: "This invitation has expired (valid for 48 hours). Please ask the team leader to resend your invite.",
+                expired: true,
+            });
+        }
+
         if (invitation.status !== "Pending") {
             return res.status(400).json({
                 success: false,
@@ -694,6 +931,221 @@ export const rejectInvitation = async (req, res, next) => {
     }
 };
 
+// 6b. ACCEPT INVITATION BY TOKEN (Used for invite links: /team?invite=<token>)
+export const acceptInvitationByToken = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { token } = req.body;
+
+        if (!token || typeof token !== "string" || !token.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid invitation token is required",
+            });
+        }
+
+        const cleanToken = token.trim();
+
+        const { rows } = await pool.query(`
+            SELECT i.*, p.title as project_title, p.owner_id
+            FROM invitations i
+            JOIN projects p ON i.project_id = p.id
+            WHERE i.token = $1;
+        `, [cleanToken]);
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Invalid invitation link",
+            });
+        }
+
+        const invitation = rows[0];
+
+        // 48-Hour Expiration Check
+        const isExpired = invitation.status === "Expired" || (invitation.expires_at && new Date(invitation.expires_at) <= new Date());
+        if (isExpired) {
+            if (invitation.status !== "Expired") {
+                await pool.query("UPDATE invitations SET status = 'Expired' WHERE id = $1", [invitation.id]);
+            }
+            return res.status(400).json({
+                success: false,
+                message: "This invitation link has expired (valid for 48 hours). Please ask the team leader to resend your invite.",
+                expired: true,
+            });
+        }
+
+        if (invitation.status === "Accepted") {
+            return res.status(200).json({
+                success: true,
+                message: "This invitation has already been accepted.",
+                projectId: invitation.project_id,
+            });
+        }
+
+        // Verify recipient identity matches invitation email or recipient_id
+        const userEmail = String(req.user.email || "").toLowerCase().trim();
+        const recipientEmail = String(invitation.recipient_email || "").toLowerCase().trim();
+        const isRecipientMatch =
+            (recipientEmail && recipientEmail === userEmail) ||
+            (invitation.recipient_id && Number(invitation.recipient_id) === Number(userId));
+
+        if (!isRecipientMatch) {
+            return res.status(403).json({
+                success: false,
+                message: "This invitation link was issued to a different email address. Please login with the invited account.",
+            });
+        }
+
+        // Branch A: Mentor invitation acceptance via link -> officially assigns projects.mentor_id in a transaction
+        if (String(invitation.role || "").toLowerCase() === "mentor") {
+            if (!MENTOR_ROLES.has(String(req.user.role || "").toLowerCase()) || isDirector(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Only an active Faculty Mentor can accept a mentor invitation",
+                });
+            }
+
+            const client = await pool.connect();
+            try {
+                await client.query("BEGIN");
+                const projRes = await client.query(
+                    "SELECT id, title, owner_id FROM projects WHERE id = $1 FOR UPDATE;",
+                    [invitation.project_id]
+                );
+                if (projRes.rows.length === 0) {
+                    await client.query("ROLLBACK");
+                    return res.status(404).json({ success: false, message: "Project no longer exists" });
+                }
+                const project = projRes.rows[0];
+
+                await client.query(
+                    "UPDATE projects SET mentor_id = $1, updated_at = NOW() WHERE id = $2;",
+                    [userId, project.id]
+                );
+                await client.query(
+                    "UPDATE invitations SET status = 'Accepted', recipient_id = $1 WHERE id = $2;",
+                    [userId, invitation.id]
+                );
+                // Reject any other competing pending mentor invitations for the same project
+                await client.query(
+                    "UPDATE invitations SET status = 'Rejected' WHERE project_id = $1 AND role = 'mentor' AND status = 'Pending' AND id != $2;",
+                    [project.id, invitation.id]
+                );
+
+                await logActivity({
+                    projectId: project.id,
+                    userId,
+                    action: "MENTOR_INVITATION_ACCEPTED",
+                    description: `${req.user.name} accepted the mentor invitation for "${project.title}" via invite link`,
+                    entityType: "Project",
+                    entityId: project.id,
+                    client,
+                });
+
+                const membersRes = await client.query(
+                    `SELECT DISTINCT uid FROM (
+                        SELECT owner_id AS uid FROM projects WHERE id = $1 AND owner_id IS NOT NULL
+                        UNION
+                        SELECT user_id AS uid FROM project_members WHERE project_id = $1
+                    ) t;`,
+                    [project.id]
+                );
+
+                for (const m of membersRes.rows) {
+                    await client.query(
+                        `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                         VALUES ($1, 'Mentor Assigned', $2, 'mentor_assignment', FALSE, NOW());`,
+                        [m.uid, `${req.user.name} accepted your mentor invitation and is now mentoring "${project.title}".`]
+                    );
+                }
+
+                await client.query("COMMIT");
+            } catch (txErr) {
+                await client.query("ROLLBACK");
+                throw txErr;
+            } finally {
+                client.release();
+            }
+
+            invalidateAllCaches();
+
+            return res.status(200).json({
+                success: true,
+                message: "Mentor invitation accepted. You are now the assigned mentor for this project.",
+                projectId: invitation.project_id,
+            });
+        }
+
+        // Branch B: Standard student member invitation acceptance via link
+        // Check if user is already the project owner
+        if (Number(invitation.owner_id) === Number(userId)) {
+            return res.status(200).json({
+                success: true,
+                message: "You are the leader of this project.",
+                projectId: invitation.project_id,
+            });
+        }
+
+        // Check if user is already a member
+        const memberCheck = await pool.query(
+            "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+            [invitation.project_id, userId]
+        );
+        if (memberCheck.rows.length > 0) {
+            return res.status(200).json({
+                success: true,
+                message: "You are already a member of this project.",
+                projectId: invitation.project_id,
+            });
+        }
+
+        // Add to project_members with strict allowlisted role
+        const safeMemberRole = ALLOWED_MEMBER_ROLES.has(String(invitation.role || "").toLowerCase())
+            ? String(invitation.role).toLowerCase()
+            : "member";
+
+        await pool.query(`
+            INSERT INTO project_members (project_id, user_id, role)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (project_id, user_id) DO NOTHING;
+        `, [invitation.project_id, userId, safeMemberRole]);
+
+        // Mark invitation accepted and record recipient
+        await pool.query(
+            "UPDATE invitations SET status = 'Accepted', recipient_id = $1 WHERE id = $2;",
+            [userId, invitation.id]
+        );
+
+        await logActivity({
+            projectId: invitation.project_id,
+            userId,
+            action: "INVITATION_ACCEPTED",
+            description: `${req.user.name} joined "${invitation.project_title}" via invite link`,
+            entityType: "Project",
+            entityId: invitation.project_id,
+        });
+
+        // Notify project owner
+        if (invitation.owner_id && Number(invitation.owner_id) !== Number(userId)) {
+            await pool.query(`
+                INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                VALUES ($1, 'New Team Member', $2, 'team_added', FALSE, NOW());
+            `, [invitation.owner_id, `${req.user.name} accepted your invitation and joined "${invitation.project_title}".`]);
+        }
+
+        invalidateAllCaches();
+
+        return res.status(200).json({
+            success: true,
+            message: "Invitation accepted! Welcome to the squad.",
+            projectId: invitation.project_id,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // 7. REMOVE TEAM MEMBER
 export const removeTeamMember = async (req, res, next) => {
     try {
@@ -719,7 +1171,16 @@ export const removeTeamMember = async (req, res, next) => {
         }
 
         const project = projRes.rows[0];
-        if (role === "mentor" || role === "faculty" || (!isAdmin && Number(project.owner_id) !== Number(userId))) {
+        let isLeader = Number(project.owner_id) === Number(userId);
+        if (!isLeader && !isAdmin) {
+            const leaderCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 AND LOWER(role) = 'leader';",
+                [projectId, userId]
+            );
+            isLeader = leaderCheck.rows.length > 0;
+        }
+
+        if (role === "mentor" || role === "faculty" || (!isAdmin && !isLeader)) {
             return res.status(403).json({
                 success: false,
                 message: "Forbidden. Only the current Team Leader or an Administrator can remove squad members.",
@@ -737,6 +1198,13 @@ export const removeTeamMember = async (req, res, next) => {
             "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
             [projectId, memberId]
         );
+
+        // Explicitly unassign any tasks belonging to this project assigned to the removed member
+        await pool.query(
+            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+            [projectId, memberId]
+        );
+
         invalidateAllCaches();
         evictUserFromProjectRooms(req, projectId, memberId);
 
@@ -801,6 +1269,12 @@ export const removeProjectMentor = async (req, res, next) => {
         await pool.query(
             "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE id = $1",
             [projectId]
+        );
+
+        // Explicitly unassign any tasks belonging to this project assigned to the removed mentor
+        await pool.query(
+            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+            [projectId, removedMentorId]
         );
 
         // Cancel any pending mentor invitations for this project
@@ -924,6 +1398,13 @@ export const leaveProject = async (req, res, next) => {
             "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
             [projectId, userId]
         );
+
+        // Explicitly unassign any tasks belonging to this project assigned to the departing member
+        await pool.query(
+            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+            [projectId, userId]
+        );
+
         invalidateAllCaches();
         evictUserFromProjectRooms(req, projectId, userId);
 

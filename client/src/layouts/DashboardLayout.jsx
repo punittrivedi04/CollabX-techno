@@ -115,6 +115,7 @@ function resolvePageTitle(pathname) {
   if (pathname.startsWith("/admin/teams/")) return "TEAM DETAILS";
   if (pathname.startsWith("/mentor/students/")) return "STUDENT PROFILE";
   if (pathname.startsWith("/mentor/teams/")) return "TEAM DETAILS";
+  if (pathname.startsWith("/director/students/")) return "STUDENT INSPECTION";
   return "WORKSPACE";
 }
 
@@ -362,7 +363,7 @@ export default function DashboardLayout() {
                   onClick={() => setMobileOpen(false)}
                   className="inline-flex items-baseline text-lg font-extrabold tracking-tight text-[#141A18]"
                 >
-                  <span>collabx</span>
+                  <span>CollabX</span>
                   <span className="text-[#1E6B4B]">.</span>
                 </NavLink>
                 <button
@@ -444,7 +445,7 @@ export default function DashboardLayout() {
             to={homeRoute}
             className="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl"
           >
-            <span>collabx</span>
+            <span>CollabX</span>
             <span className="text-[#1E6B4B]">.</span>
           </NavLink>
 

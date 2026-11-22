@@ -208,7 +208,10 @@ app.use(
 if (process.env.QUIET_LOGS !== "true") {
     app.use(
         morgan(process.env.NODE_ENV === "production" ? "combined" : "dev", {
-            skip: (req) => req.path === "/api/health",
+            skip: (req) =>
+                req.path === "/api/health" ||
+                req.path === "/health" ||
+                Boolean(req.originalUrl && req.originalUrl.includes("/health")),
         })
     );
 }
@@ -227,11 +230,12 @@ app.use("/api", (req, res, next) => {
     if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") {
         res.on("finish", () => {
             if (res.statusCode < 400) {
+                const target = (req.originalUrl || req.path || "").toLowerCase();
                 if (
-                    req.path.startsWith("/users") ||
-                    req.path.startsWith("/user") ||
-                    req.path.startsWith("/auth") ||
-                    req.path.startsWith("/admin")
+                    target.includes("/user") ||
+                    target.includes("/auth") ||
+                    target.includes("/admin") ||
+                    target.includes("/mentor")
                 ) {
                     invalidateUserCache();
                 } else {
@@ -781,13 +785,21 @@ const startServer = async () => {
             throw new Error("Please configure a strong JWT_SECRET in .env");
         }
 
-        // Test Supabase PostgreSQL connection, run safe migrations & ensure performance indexes
+        // Fast lightweight database connectivity check on normal startup
         const dbCheck = await pool.query("SELECT NOW() as db_time;");
-        console.log("PostgreSQL Connected:", dbCheck.rows[0].db_time);
-        await ensureSchemaMigrations();
-        console.log("PostgreSQL Schema Migrations: VERIFIED");
-        await ensurePerformanceIndexes();
-        console.log("PostgreSQL Performance Indexes: VERIFIED");
+        if (process.env.NODE_ENV !== "production") {
+            console.log("PostgreSQL Connected:", dbCheck.rows[0].db_time);
+        } else {
+            console.log("PostgreSQL Connected: OK");
+        }
+
+        // Run DDL migrations & indexes only when explicitly requested (or via npm run db:init)
+        if (process.env.RUN_DB_MIGRATIONS === "true") {
+            await ensureSchemaMigrations();
+            console.log("PostgreSQL Schema Migrations: VERIFIED");
+            await ensurePerformanceIndexes();
+            console.log("PostgreSQL Performance Indexes: VERIFIED");
+        }
 
         startTaskReminderJob(io);
 
@@ -801,18 +813,17 @@ const startServer = async () => {
         });
 
         server.listen(PORT, "0.0.0.0", 2048, () => {
-            console.log("----------------------------------");
-            console.log(`CollabX Backend: http://localhost:${PORT}`);
-            console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-            console.log("Database: Supabase PostgreSQL (pg driver, max pool: 12)");
-            console.log("TCP Accept Backlog: 2048 | Micro TTL Cache: ENABLED (500 entries, 3s)");
-            console.log("Helmet Security: ENABLED");
-            console.log("CORS Origin Allowlist: ENABLED");
-            console.log("Dual JWT & Refresh Cookie: ENABLED");
-            console.log("Stateless 2-Minute OTP: ENABLED");
-            console.log("Socket.IO JWT Authentication: ENABLED (perMessageDeflate: false, 64KB cap)");
-            console.log("Real-time Chat & Task Scheduler: ENABLED");
-            console.log("----------------------------------");
+            if (process.env.NODE_ENV === "production") {
+                console.log(`CollabX Backend running on port ${PORT} [production]`);
+            } else {
+                console.log("----------------------------------");
+                console.log(`CollabX Backend: http://localhost:${PORT}`);
+                console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+                console.log("Database: Supabase PostgreSQL (pg driver, max pool: 20)");
+                console.log("Security: Helmet, CORS, RateLimiters, Dual JWT");
+                console.log("Real-time Chat, Notifications & Task Scheduler: ENABLED");
+                console.log("----------------------------------");
+            }
         });
     } catch (error) {
         console.error("Server startup failed:", error.message);

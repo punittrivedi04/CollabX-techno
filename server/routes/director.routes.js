@@ -6,6 +6,7 @@ import {
     getDirectorReports,
     getDirectorProjectById,
     getDirectorMentorById,
+    getDirectorStudentById,
 } from "../controllers/director.controller.js";
 
 const router = express.Router();
@@ -17,5 +18,6 @@ router.get("/overview", getDirectorOverview);
 router.get("/reports", getDirectorReports);
 router.get("/projects/:id", getDirectorProjectById);
 router.get("/mentors/:id", getDirectorMentorById);
+router.get("/students/:id", getDirectorStudentById);
 
 export default router;

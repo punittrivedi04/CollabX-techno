@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   UserPlus,
   Search,
@@ -48,6 +49,9 @@ export default function Team() {
 
   const userRole = String(currentUser?.role || "").toLowerCase();
   const isDirector = userRole === "director";
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const inviteToken = searchParams.get("invite");
 
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -161,6 +165,51 @@ export default function Team() {
     if (currentUserId) loadProjects();
     loadMentors();
   }, [currentUserId]);
+
+  useEffect(() => {
+    if (!inviteToken) return;
+
+    let isMounted = true;
+    const acceptTokenInvite = async () => {
+      setBusy(true);
+      setError("");
+      setSuccess("");
+      try {
+        const res = await api.post("/team/invitations/accept-token", {
+          token: inviteToken,
+        });
+        if (isMounted) {
+          setSuccess(res.data.message || "Invitation accepted! Welcome to the squad.");
+          if (res.data.projectId) {
+            setSelectedProjectId(String(res.data.projectId));
+          }
+          await loadProjects();
+          window.dispatchEvent(new CustomEvent("collabx_team_updated"));
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(getError(err, "Failed to accept invitation"));
+        }
+      } finally {
+        if (isMounted) {
+          setBusy(false);
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete("invite");
+              return next;
+            },
+            { replace: true },
+          );
+        }
+      }
+    };
+
+    acceptTokenInvite();
+    return () => {
+      isMounted = false;
+    };
+  }, [inviteToken]);
 
   useEffect(() => {
     setTeam(null);
@@ -309,31 +358,69 @@ export default function Team() {
     }
   };
 
-  const handleCancelInvitation = async (invitation) => {
+  const handleResendInvitation = async (invitation) => {
     if (busy) return;
-    if (
-      !window.confirm("Cancel this invitation? The old link will stop working.")
-    ) {
-      return;
-    }
+    const invId = getId(invitation);
+    if (!invId || !selectedProjectId) return;
 
     setBusy(true);
+    setError("");
+    setSuccess("");
 
     try {
-      const invId = getId(invitation);
-      const response = await api.delete(
-        `/team/${selectedProjectId}/invitations/${invId}`,
+      const response = await api.post(
+        `/team/${selectedProjectId}/invitations/${invId}/resend`,
       );
-
-      setSuccess(response.data.message);
+      setSuccess(
+        response.data.message ||
+          "Invitation renewed with a fresh 48-hour link!",
+      );
       await loadTeam();
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
     } catch (err) {
-      setError(getError(err));
+      setError(getError(err, "Failed to re-send invitation"));
     } finally {
       setBusy(false);
     }
   };
+
+  const handleDeleteInvitation = async (invitation) => {
+    if (busy) return;
+    const invId = getId(invitation);
+    if (!invId || !selectedProjectId) return;
+
+    const isExp =
+      invitation.isExpired ||
+      invitation.status === "Expired" ||
+      (invitation.expiresAt && new Date(invitation.expiresAt) <= new Date());
+    const confirmMsg = isExp
+      ? "Remove this expired invitation record?"
+      : "Cancel this invitation? The existing link will stop working.";
+
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const response = await api.delete(
+        `/team/${selectedProjectId}/invitations/${invId}`,
+      );
+
+      setSuccess(response.data.message || "Invitation removed successfully");
+      await loadTeam();
+      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
+    } catch (err) {
+      setError(getError(err, "Failed to remove invitation"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelInvitation = handleDeleteInvitation;
 
   const handleRemoveMember = async (member) => {
     if (busy) return;
@@ -451,16 +538,64 @@ export default function Team() {
     }
   };
 
-  const copyInvitation = async (url) => {
+  const getInvitationUrl = (inv) => {
+    if (!inv) return `${window.location.origin}/team`;
+    if (inv.invitationUrl && !String(inv.invitationUrl).includes("undefined")) {
+      return inv.invitationUrl;
+    }
+    const token = inv.token;
+    const origin = window.location.origin;
+    if (token && token !== "undefined") {
+      return `${origin}/team?invite=${token}`;
+    }
+    const invId = getId(inv);
+    if (invId) {
+      return `${origin}/team?invitationId=${invId}`;
+    }
+    return `${origin}/team`;
+  };
+
+  const getExpirationInfo = (invitation) => {
+    if (!invitation) return { isExpired: false, label: "" };
+    const expiresAt = invitation.expiresAt || invitation.expires_at;
+    const isExplicitExpired =
+      invitation.status === "Expired" || Boolean(invitation.isExpired);
+    if (!expiresAt) {
+      return { isExpired: isExplicitExpired, label: isExplicitExpired ? "Expired" : "" };
+    }
+    const expDate = new Date(expiresAt);
+    const now = new Date();
+    const diffMs = expDate.getTime() - now.getTime();
+    if (diffMs <= 0 || isExplicitExpired) {
+      return { isExpired: true, label: "Expired" };
+    }
+    const hours = Math.max(1, Math.round(diffMs / (1000 * 60 * 60)));
+    return {
+      isExpired: false,
+      label: hours > 24 ? `Expires in ${Math.round(hours / 24)}d` : `Expires in ${hours}h`,
+    };
+  };
+
+  const copyInvitation = async (invitation) => {
+    const url = typeof invitation === "string" ? invitation : getInvitationUrl(invitation);
+    if (!url || url.includes("undefined")) {
+      setError("Unable to generate invitation link. Please re-invite or refresh.");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(url);
       setSuccess("Invitation link copied!");
     } catch {
-      setError("Unable to copy link. Please copy it manually.");
+      setError("Unable to copy link. Please copy it manually: " + url);
     }
   };
 
-  const shareWhatsApp = (url) => {
+  const shareWhatsApp = (invitation) => {
+    const url = typeof invitation === "string" ? invitation : getInvitationUrl(invitation);
+    if (!url || url.includes("undefined")) {
+      setError("Unable to generate invitation link. Please re-invite or refresh.");
+      return;
+    }
     const text = `Join my CollabX project: ${url}`;
     window.open(
       `https://wa.me/?text=${encodeURIComponent(text)}`,
@@ -867,79 +1002,140 @@ export default function Team() {
                   No pending invitations.
                 </div>
               ) : (
-                pendingInvitations.map((invitation) => (
-                  <div
-                    key={getId(invitation)}
-                    className="flex flex-col gap-4 rounded-[24px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-bold text-[#141A18] dark:text-slate-100">
-                          {invitation.recipient?.name}
-                        </p>
-                        {(invitation.recipient?.roll_no || invitation.recipient?.rollNumber) && (
-                          <span className="rounded-full bg-[#141A17]/10 dark:bg-white/10 px-2 py-0.5 text-[11px] font-mono font-bold text-[#42504B] dark:text-slate-300">
-                            Roll: {invitation.recipient?.roll_no || invitation.recipient?.rollNumber}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-[#5C6B66] dark:text-[#94A89D]">
-                        {invitation.recipient?.email}
-                      </p>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-2.5 py-0.5 text-xs font-semibold text-[#42504B] dark:text-slate-300">
-                          <Clock size={12} /> Pending
-                        </span>
-                        {String(invitation.role || "").toLowerCase() === "mentor" && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/12 px-2.5 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                            <ShieldCheck size={12} /> Mentor Invite
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                pendingInvitations.map((invitation) => {
+                  const { isExpired, label: expireLabel } = getExpirationInfo(invitation);
+                  const isMentorInvite = String(invitation.role || "").toLowerCase() === "mentor";
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      {String(invitation.role || "").toLowerCase() === "mentor" ? (
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs italic text-[#5C6B66] dark:text-[#94A89D]">
-                            Awaiting Mentor Portal Acceptance
-                          </span>
-                          <button
-                            disabled={busy}
-                            onClick={() => handleCancelInvitation(invitation)}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer disabled:opacity-50"
-                          >
-                            <X size={14} /> Cancel Request
-                          </button>
+                  return (
+                    <div
+                      key={getId(invitation)}
+                      className="flex flex-col gap-4 rounded-[24px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-5 shadow-2xs sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-bold text-[#141A18] dark:text-slate-100">
+                            {invitation.recipient?.name || invitation.recipientEmail}
+                          </p>
+                          {(invitation.recipient?.roll_no || invitation.recipient?.rollNumber) && (
+                            <span className="rounded-full bg-[#141A17]/10 dark:bg-white/10 px-2 py-0.5 text-[11px] font-mono font-bold text-[#42504B] dark:text-slate-300">
+                              Roll: {invitation.recipient?.roll_no || invitation.recipient?.rollNumber}
+                            </span>
+                          )}
                         </div>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => copyInvitation(invitation.invitationUrl)}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-2 text-xs font-bold"
-                          >
-                            <Copy size={14} /> Copy Link
-                          </button>
+                        <p className="text-sm text-[#5C6B66] dark:text-[#94A89D]">
+                          {invitation.recipient?.email || invitation.recipientEmail}
+                        </p>
 
-                          <button
-                            onClick={() => shareWhatsApp(invitation.invitationUrl)}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-[#2E8B63]/35 bg-[#E3F3EB] px-3.5 py-2 text-xs font-bold text-[#1E6B4B] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#22C55E]/40 dark:bg-[#13291E] dark:text-[#6EE7B7] dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B]"
-                          >
-                            <MessageCircle size={14} /> WhatsApp
-                          </button>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {isExpired ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-xs font-bold text-amber-700 dark:text-amber-400">
+                              <AlertCircle size={12} /> Expired (48h window passed)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] px-2.5 py-0.5 text-xs font-semibold text-[#42504B] dark:text-slate-300">
+                              <Clock size={12} /> Pending {expireLabel ? `· ${expireLabel}` : ""}
+                            </span>
+                          )}
+                          {isMentorInvite && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/12 px-2.5 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                              <ShieldCheck size={12} /> Mentor Invite
+                            </span>
+                          )}
+                        </div>
 
-                          <button
-                            disabled={busy}
-                            onClick={() => handleCancelInvitation(invitation)}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer disabled:opacity-50"
-                          >
-                            <X size={14} /> Cancel
-                          </button>
-                        </>
-                      )}
+                        {isExpired && (
+                          <p className="mt-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                            Invitation expired after 48 hours without acceptance. Re-invite to generate a fresh 48-hour link, or remove it.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {isMentorInvite ? (
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            {!isExpired && (
+                              <span className="text-xs italic text-[#5C6B66] dark:text-[#94A89D]">
+                                Awaiting Mentor Portal Acceptance
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResendInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-2 text-xs font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> Re-invite
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleDeleteInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 size={13} /> {isExpired ? "Remove" : "Cancel"}
+                            </button>
+                          </div>
+                        ) : isExpired ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResendInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-2 text-xs font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> Re-invite
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleDeleteInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 size={13} /> Remove
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => copyInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-2 text-xs font-bold cursor-pointer"
+                            >
+                              <Copy size={14} /> Copy Link
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => shareWhatsApp(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#2E8B63]/35 bg-[#E3F3EB] px-3.5 py-2 text-xs font-bold text-[#1E6B4B] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#22C55E]/40 dark:bg-[#13291E] dark:text-[#6EE7B7] dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] cursor-pointer"
+                            >
+                              <MessageCircle size={14} /> WhatsApp
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResendInvitation(invitation)}
+                              title="Renew 48-hour expiration window"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-2 text-xs font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              <RefreshCw size={13} className={busy ? "animate-spin" : ""} /> Re-send
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleDeleteInvitation(invitation)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 px-3.5 py-2 text-xs font-bold text-red-600 dark:text-red-400 transition hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 size={13} /> Cancel
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}

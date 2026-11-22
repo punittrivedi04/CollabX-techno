@@ -41,7 +41,7 @@ const getMentorPerformanceTheme = (completed, total) => {
     return {
       percentage: 0,
       label: "0% Completed",
-      barColor: "bg-neutral-400 dark:bg-neutral-700",
+      barColor: "bg-neutral-300 dark:bg-neutral-700",
       textColor: "text-neutral-500 dark:text-neutral-400",
     };
   }
@@ -50,23 +50,23 @@ const getMentorPerformanceTheme = (completed, total) => {
     return {
       percentage,
       label: `${percentage}% Completed`,
-      barColor: "bg-neutral-900 dark:bg-white",
-      textColor: "text-neutral-950 dark:text-white",
+      barColor: "bg-emerald-500 dark:bg-emerald-400",
+      textColor: "text-emerald-600 dark:text-emerald-400",
     };
   }
   if (percentage >= 30) {
     return {
       percentage,
       label: `${percentage}% Completed`,
-      barColor: "bg-neutral-700 dark:bg-neutral-300",
-      textColor: "text-neutral-800 dark:text-neutral-200",
+      barColor: "bg-amber-500 dark:bg-amber-400",
+      textColor: "text-amber-600 dark:text-amber-400",
     };
   }
   return {
     percentage,
     label: `${percentage}% Completed`,
-    barColor: "bg-neutral-400 dark:bg-neutral-700",
-    textColor: "text-neutral-600 dark:text-neutral-400",
+    barColor: "bg-rose-500 dark:bg-rose-400",
+    textColor: "text-rose-600 dark:text-rose-400",
   };
 };
 

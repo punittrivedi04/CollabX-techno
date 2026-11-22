@@ -9,6 +9,7 @@ import {
   Mail,
   Phone,
   RefreshCw,
+  Trash2,
   UserCog,
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ import {
 import SearchableSelect from "../../components/portal/SearchableSelect";
 import PortalErrorBoundary from "../../components/portal/PortalErrorBoundary";
 import {
+  ConfirmDialog,
   EmptyState,
   ErrorAlert,
   LoadingState,
@@ -57,6 +59,9 @@ function AdminMentorDetailContent() {
   const [demoteMode, setDemoteMode] = useState("reassign");
   const [replacementId, setReplacementId] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [reloadTick, setReloadTick] = useState(0);
   const triggerReload = useCallback(() => setReloadTick((n) => n + 1), []);
@@ -184,6 +189,20 @@ function AdminMentorDetailContent() {
     }
   };
 
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await api.delete(`/admin/users/${id}`);
+      navigate("/admin/mentors", { replace: true });
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete mentor."));
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
   if (loading) return <LoadingState label="Loading mentor details..." />;
 
   if (!mentor) {
@@ -245,6 +264,14 @@ function AdminMentorDetailContent() {
             <UserCog size={14} strokeWidth={1.85} />
             <span>Transition Role to Student</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-900/60"
+          >
+            <Trash2 size={14} strokeWidth={1.85} />
+            <span>Delete Mentor</span>
+          </button>
         </div>
       </div>
 
@@ -281,11 +308,10 @@ function AdminMentorDetailContent() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-5">
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
             ["Assigned Students", stats?.assignedStudentCount ?? 0],
-            ["Teams", stats?.teamCount ?? 0],
-            ["Active Projects", stats?.activeProjectCount ?? 0],
+            ["Teams / Projects", stats?.teamCount ?? teams.length],
             ["Completed", stats?.completedProjectCount ?? 0],
             ["Avg Progress", `${stats?.avgProgress ?? 0}%`],
           ].map(([label, val]) => (
@@ -577,6 +603,17 @@ function AdminMentorDetailContent() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => !deleting && setConfirmDelete(false)}
+        onConfirm={handleDelete}
+        busy={deleting}
+        tone="danger"
+        title="Delete Mentor Account Permanently"
+        confirmLabel="Delete Mentor"
+        message={`Are you sure you want to permanently delete the account for "${mentorName}" (${mentorEmail})? Any projects mentored will have their mentor assignment cleared, and active tokens will be revoked. This action is irreversible.`}
+      />
     </div>
   );
 }

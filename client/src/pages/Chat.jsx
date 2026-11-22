@@ -347,6 +347,17 @@ export default function Chat() {
     };
   }, [projectId, channel, isDirector]);
 
+  useEffect(() => {
+    if (!confirmDeleteId) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setConfirmDeleteId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [confirmDeleteId]);
+
   const scrollToBottom = (behavior = "smooth") => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   };
@@ -731,9 +742,10 @@ export default function Chat() {
                                     type="button"
                                     disabled={deletingId === msgId}
                                     onClick={() => setConfirmDeleteId(null)}
-                                    className="rounded-full px-1.5 py-0.5 text-[#5C6B66] dark:text-[#94A89D] transition hover:bg-[#EFF4F0] dark:hover:bg-[#1F2C25] hover:text-[#141A18] dark:hover:text-slate-100"
+                                    aria-label="Cancel delete message"
+                                    className="rounded-full px-1.5 py-0.5 text-[#5C6B66] dark:text-[#94A89D] transition hover:bg-[#EFF4F0] dark:hover:bg-[#1F2C25] hover:text-[#141A18] dark:hover:text-slate-100 cursor-pointer"
                                   >
-                                    Cancel
+                                    No
                                   </button>
                                 </div>
                               ) : (

@@ -7,17 +7,18 @@ export const getDashboard = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const role = String(req.user.role || "student").toLowerCase().trim();
-        const directorFlag = isDirector(req.user);
-        const isAdmin = role === "admin" || role === "coordinator" || directorFlag;
+        const isDirectorUser = role === "director" || isDirector(req.user);
+        const isAdmin = role === "admin" || role === "coordinator";
+        const hasArchivedOversight = isAdmin || isDirectorUser;
 
         // Strictly isolate cache key per userId + role + director flag (prevents cross-admin myTasks leakage)
-        const cacheKey = `dashboard:u:${userId}:r:${role}:d:${directorFlag ? 1 : 0}`;
+        const cacheKey = `dashboard:u:${userId}:r:${role}:d:${isDirectorUser ? 1 : 0}`;
 
         const dashboardData = await readCache.getOrSet(cacheKey, async () => {
             let projectsQuery;
             let queryParams;
 
-            if (isAdmin) {
+            if (hasArchivedOversight) {
                 projectsQuery = `
                     SELECT p.*, u.name as owner_name, u.email as owner_email
                     FROM projects p
@@ -35,6 +36,7 @@ export const getDashboard = async (req, res, next) => {
                         OR p.mentor_id = $1 
                         OR p.id IN (SELECT project_id FROM project_members WHERE user_id = $1)
                     )
+                    AND (p.status != 'Archived' OR p.status IS NULL)
                     ORDER BY p.created_at DESC;
                 `;
                 queryParams = [userId];

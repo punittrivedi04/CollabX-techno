@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   RefreshCw,
   ShieldAlert,
+  Trash2,
   UserCheck,
   UserCog,
 } from "lucide-react";
@@ -50,6 +51,8 @@ export default function AdminRoles() {
 
   // Unclassified quick confirmation
   const [classifyAction, setClassifyAction] = useState(null);
+  const [userToDelete, setUserToDelete] = useState(null);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   // Promote Student -> Mentor
   const [promoteStudentId, setPromoteStudentId] = useState("");
@@ -195,6 +198,23 @@ export default function AdminRoles() {
       setClassifyAction(null);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (deletingUser || !userToDelete) return;
+    setDeletingUser(true);
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/admin/users/${userToDelete.id}`);
+      setSuccess(`Account for "${userToDelete.name}" deleted cleanly.`);
+      setUserToDelete(null);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err, "Unable to delete user account."));
+    } finally {
+      setDeletingUser(false);
     }
   };
 
@@ -394,6 +414,15 @@ export default function AdminRoles() {
                         >
                           <UserCog size={14} strokeWidth={1.85} />
                           <span>Approve as Mentor</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUserToDelete(u)}
+                          title="Reject & Delete Account"
+                          aria-label={`Reject and delete ${u.name}`}
+                          className="cursor-pointer rounded-xl border border-black/15 bg-neutral-50 p-2 text-neutral-600 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-white/15 dark:bg-[#101014] dark:text-neutral-400 dark:hover:border-rose-900/50 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
+                        >
+                          <Trash2 size={14} strokeWidth={1.85} />
                         </button>
                       </div>
                     </div>
@@ -726,6 +755,22 @@ export default function AdminRoles() {
           </div>
         </form>
       </Modal>
+
+      {/* Delete User Confirmation */}
+      <ConfirmDialog
+        open={Boolean(userToDelete)}
+        onClose={() => !deletingUser && setUserToDelete(null)}
+        onConfirm={handleDeleteUser}
+        busy={deletingUser}
+        tone="danger"
+        title="Delete User Account Permanently"
+        confirmLabel="Delete Account"
+        message={
+          userToDelete
+            ? `Are you sure you want to permanently delete the account for "${userToDelete.name}" (${userToDelete.email})? This action cannot be undone.`
+            : ""
+        }
+      />
     </div>
   );
 }

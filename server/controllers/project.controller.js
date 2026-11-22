@@ -2,8 +2,10 @@ import pool from "../config/db.js";
 import { formatProject, parsePositiveInt, isSafeHttpUrl, isPresentHttpUrl, pickAllowedFields } from "../utils/formatters.js";
 import { isDirector } from "../middleware/directorGuard.js";
 import { readCache, invalidateAllCaches } from "../utils/microCache.js";
+import logActivity from "../utils/activityLogger.js";
+import { purgeProjectAndDependents } from "../utils/projectCleanup.js";
 
-const VALID_STATUSES = ["Planning", "In Progress", "Completed", "On Hold"];
+const VALID_STATUSES = ["Planning", "In Progress", "Completed", "On Hold", "Archived"];
 const VALID_PRIORITIES = ["Low", "Medium", "High"];
 const MAX_TITLE_LEN = 150;
 const MAX_DESC_LEN = 2000;
@@ -100,6 +102,15 @@ export const createProject = async (req, res, next) => {
         const projectPriority = VALID_PRIORITIES.includes(priority) ? priority : "Medium";
         const projectProgress = 0; // New projects strictly start with 0% progress
         const ownerId = req.user.id;
+
+        // Role check: Director operates in read-only mode. Students/mentors/admins can create new projects.
+        const role = String(req.user.role || "").toLowerCase();
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Project creation is not permitted.",
+            });
+        }
 
         // Anti-Double Submit / Race Condition Protection (5-second idempotency window per owner & title)
         const duplicateCheck = await pool.query(
@@ -240,15 +251,16 @@ export const getProjects = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const role = String(req.user.role || "student").toLowerCase().trim();
-        const directorFlag = isDirector(req.user);
-        const isAdmin = role === "admin" || role === "coordinator" || directorFlag;
-        const cacheKey = `projects:u:${userId}:r:${role}:d:${directorFlag ? 1 : 0}`;
+        const isDirectorUser = role === "director" || isDirector(req.user);
+        const isAdmin = role === "admin" || role === "coordinator";
+        const hasArchivedOversight = isAdmin || isDirectorUser;
+        const cacheKey = `projects:u:${userId}:r:${role}:d:${isDirectorUser ? 1 : 0}`;
 
         const formattedProjects = await readCache.getOrSet(cacheKey, async () => {
             let projectsQuery;
             let queryParams;
 
-            if (isAdmin) {
+            if (hasArchivedOversight) {
                 projectsQuery = `
                     SELECT p.*, u.name as owner_name, u.email as owner_email,
                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
@@ -270,6 +282,7 @@ export const getProjects = async (req, res, next) => {
                         OR p.mentor_id = $1 
                         OR p.id IN (SELECT project_id FROM project_members WHERE user_id = $1)
                     )
+                    AND (p.status != 'Archived' OR p.status IS NULL)
                     ORDER BY p.created_at DESC;
                 `;
                 queryParams = [userId];
@@ -356,7 +369,8 @@ export const getProjectById = async (req, res, next) => {
         const project = rows[0];
         const userId = req.user.id;
         const role = String(req.user.role || "").toLowerCase();
-        const isAdmin = role === "admin" || role === "coordinator" || isDirector(req.user);
+        const isAdmin = role === "admin" || role === "coordinator";
+        const isDirectorUser = role === "director" || isDirector(req.user);
 
         // Check membership
         const memberCheck = await pool.query(
@@ -367,10 +381,18 @@ export const getProjectById = async (req, res, next) => {
         const isOwner = Number(project.owner_id) === Number(userId);
         const isMentor = Number(project.mentor_id) === Number(userId);
 
-        if (!isAdmin && !isOwner && !isMember && !isMentor) {
+        if (!isAdmin && !isDirectorUser && !isOwner && !isMember && !isMentor) {
             return res.status(403).json({
                 success: false,
                 message: "You do not have access to this project",
+            });
+        }
+
+        // Students and mentors cannot view Archived projects; Admin and Director have oversight visibility
+        if (!isAdmin && !isDirectorUser && project.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
             });
         }
 
@@ -430,13 +452,44 @@ export const updateProject = async (req, res, next) => {
         const existingProject = rows[0];
         const userId = req.user.id;
         const role = String(req.user.role || "").toLowerCase();
+
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Modifications are not permitted.",
+            });
+        }
+
         const isAdmin = role === "admin" || role === "coordinator";
         const isOwner = Number(existingProject.owner_id) === Number(userId);
 
-        if (!isAdmin && !isOwner) {
+        let isLeader = isOwner;
+        if (!isLeader && !isAdmin) {
+            const leaderCheck = await pool.query(
+                "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 AND LOWER(role) = 'leader';",
+                [projectId, userId]
+            );
+            isLeader = leaderCheck.rows.length > 0;
+        }
+
+        if (!isAdmin && !isLeader) {
             return res.status(403).json({
                 success: false,
-                message: "Only the project owner or an administrator can update this project",
+                message: "Only the project leader/owner or an administrator can update this project",
+            });
+        }
+
+        if (!isAdmin && existingProject.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
+        }
+
+        if (!isAdmin && req.body?.status === "Archived") {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden. Only an administrator can archive a project.",
             });
         }
 
@@ -555,15 +608,12 @@ export const updateProject = async (req, res, next) => {
         }
 
         // Leaderboard rule enforcement:
-        // A project can only stay on the leaderboard if status is 100% completed AND both PPT and Live Demo link are valid and present.
+        // A project on the leaderboard must have status === 'Completed', all tasks completed, and valid PPT & Demo deliverables.
+        // If it temporarily has incomplete tasks or non-Completed status, it is automatically hidden from public leaderboard
+        // visibility while preserving its existing project_stars and is_on_leaderboard flag.
         const isCompleted = String(newStatus).toLowerCase() === "completed" && totalTasks >= 1 && completedTasks === totalTasks;
         const hasBothDeliverables = isPresentHttpUrl(newPpt) && isPresentHttpUrl(newDemo);
         const qualifiesForLeaderboard = isCompleted && hasBothDeliverables;
-
-        let unlistLeaderboard = false;
-        if (existingProject.is_on_leaderboard && !qualifiesForLeaderboard) {
-            unlistLeaderboard = true;
-        }
 
         // updated_at automatically updated by PostgreSQL trigger
         const updateRes = await pool.query(`
@@ -577,7 +627,6 @@ export const updateProject = async (req, res, next) => {
                 github_url = $7,
                 demo_url = $8,
                 ppt_url = $9,
-                is_on_leaderboard = CASE WHEN $11::boolean = TRUE THEN FALSE ELSE is_on_leaderboard END,
                 updated_at = NOW()
             WHERE id = $10
             RETURNING *;
@@ -592,16 +641,29 @@ export const updateProject = async (req, res, next) => {
             newDemo,
             newPpt,
             projectId,
-            unlistLeaderboard,
         ]);
 
         const updated = updateRes.rows[0];
         invalidateAllCaches();
 
-        if (unlistLeaderboard) {
+        if (existingProject.is_on_leaderboard) {
             const io = req.app.get("io");
             if (io) {
-                io.emit("leaderboard:project_withdrawn", { projectId });
+                if (!qualifiesForLeaderboard) {
+                    // Temporarily hide from public leaderboard
+                    io.emit("leaderboard:project_withdrawn", { projectId });
+                } else {
+                    // Re-qualify and make visible again with existing stars
+                    io.emit("leaderboard:new_project", { projectId, title: updated.title });
+                    const { rows: starRows } = await pool.query(
+                        "SELECT COUNT(*)::int AS count FROM project_stars WHERE project_id = $1;",
+                        [projectId]
+                    );
+                    io.emit("leaderboard:star_update", {
+                        projectId,
+                        starCount: Number(starRows[0]?.count || 0),
+                    });
+                }
             }
         }
 
@@ -627,9 +689,17 @@ export const updateProject = async (req, res, next) => {
     }
 };
 
-// 5. DELETE PROJECT
+// 5. DELETE PROJECT (Full Transactional Cleanup for Leader & Admin flows)
 export const deleteProject = async (req, res, next) => {
     try {
+        const role = String(req.user.role || "").toLowerCase();
+        if (role === "director" || isDirector(req.user)) {
+            return res.status(403).json({
+                success: false,
+                message: "Director operates in read-only executive mode. Deletions are not permitted.",
+            });
+        }
+
         const projectId = parsePositiveInt(req.params.id);
         if (!projectId) {
             return res.status(400).json({
@@ -638,33 +708,24 @@ export const deleteProject = async (req, res, next) => {
             });
         }
 
-        const { rows } = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
-        if (rows.length === 0) {
-            return res.status(404).json({
+        const io = req.app.get("io");
+        const result = await purgeProjectAndDependents({
+            projectId,
+            user: req.user,
+            io,
+        });
+
+        if (!result.success) {
+            return res.status(result.status || 400).json({
                 success: false,
-                message: "Project not found",
+                message: result.message,
             });
         }
-
-        const project = rows[0];
-        const userId = req.user.id;
-        const role = String(req.user.role || "").toLowerCase();
-        const isAdmin = role === "admin" || role === "coordinator";
-        const isOwner = Number(project.owner_id) === Number(userId);
-
-        if (!isAdmin && !isOwner) {
-            return res.status(403).json({
-                success: false,
-                message: "Only the project owner or an administrator can delete this project",
-            });
-        }
-
-        await pool.query("DELETE FROM projects WHERE id = $1", [projectId]);
-        invalidateAllCaches();
 
         return res.status(200).json({
             success: true,
-            message: "Project deleted successfully",
+            message: "Project and all associated tasks, squad members, and invitations deleted successfully",
+            project: result.project,
         });
     } catch (error) {
         next(error);

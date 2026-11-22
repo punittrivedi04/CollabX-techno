@@ -5,7 +5,6 @@ import {
   Award,
   BarChart3,
   CheckCircle2,
-  Eye,
   GraduationCap,
   RefreshCw,
   ShieldCheck,
@@ -50,6 +49,7 @@ export default function DirectorOverview() {
   // Executive Drill-Down Inspection states
   const [inspectProjectId, setInspectProjectId] = useState(null);
   const [inspectMentorId, setInspectMentorId] = useState(null);
+  const [inspectStudentId, setInspectStudentId] = useState(null);
 
   const load = useCallback(async (bg = false) => {
     if (bg) setRefreshing(true);
@@ -128,10 +128,6 @@ export default function DirectorOverview() {
             <p className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
               Techno NJR · Executive Director Portal
             </p>
-            <NeutralBadge>
-              <Eye size={11} strokeWidth={1.85} />
-              <span>Read-Only Executive Mode</span>
-            </NeutralBadge>
           </div>
           <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-neutral-950 dark:text-white sm:text-3xl">
             Executive Overview
@@ -365,17 +361,26 @@ export default function DirectorOverview() {
       <DirectorInspectDrawer
         projectId={inspectProjectId}
         mentorId={inspectMentorId}
+        studentId={inspectStudentId}
         onClose={() => {
           setInspectProjectId(null);
           setInspectMentorId(null);
+          setInspectStudentId(null);
         }}
         onSelectProject={(pid) => {
           setInspectMentorId(null);
+          setInspectStudentId(null);
           setInspectProjectId(pid);
         }}
         onSelectMentor={(mid) => {
           setInspectProjectId(null);
+          setInspectStudentId(null);
           setInspectMentorId(mid);
+        }}
+        onSelectStudent={(sid) => {
+          setInspectProjectId(null);
+          setInspectMentorId(null);
+          setInspectStudentId(sid);
         }}
       />
     </div>

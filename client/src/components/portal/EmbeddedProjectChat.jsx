@@ -15,6 +15,8 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
   const [sending, setSending] = useState(false);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const messagesListRef = useRef(null);
 
   const isDirector = isDirectorUser(user);
@@ -65,6 +67,7 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
       const targetId = String(payload?.messageId || payload?.id || payload?._id || "");
       if (!targetId) return;
       setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== targetId));
+      setConfirmDeleteId((prev) => (String(prev) === targetId ? null : prev));
     };
 
     socket.on("chat:message:new", handleNew);
@@ -76,6 +79,17 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
       socket.off("chat:message:deleted", handleDeleted);
     };
   }, [projectId, isDirector]);
+
+  useEffect(() => {
+    if (!confirmDeleteId) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setConfirmDeleteId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [confirmDeleteId]);
 
   // Scroll ONLY the inner chat messages list — never scroll the outer page window
   useEffect(() => {
@@ -117,11 +131,17 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
   };
 
   const handleDeleteOwn = async (messageId) => {
+    if (!projectId || !messageId || deletingId) return;
+    setDeletingId(messageId);
+    setError("");
     try {
       await api.delete(`/messages/${projectId}/messages/${messageId}`);
       setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== String(messageId)));
+      setConfirmDeleteId(null);
     } catch (err) {
       setError(getErrorMessage(err, "Unable to delete message."));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -165,13 +185,14 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
           </div>
         ) : (
           messages.map((msg) => {
+            const msgId = String(msg.id || msg._id || "");
             const senderId = String(msg.sender?.id || msg.sender?._id || msg.sender_id || "");
             const isMe = senderId === currentUserId;
             const senderName = msg.sender?.name || msg.sender_name || "Member";
             const senderRole = msg.sender?.role || "";
             return (
               <div
-                key={msg.id || msg._id}
+                key={msgId}
                 className={`flex items-end gap-2.5 ${isMe ? "justify-end" : "justify-start"}`}
               >
                 {!isMe && (
@@ -194,14 +215,43 @@ export default function EmbeddedProjectChat({ projectId, projectTitle }) {
                     <div className="flex items-center gap-1.5">
                       <span>{formatDateTime(msg.createdAt || msg.created_at)}</span>
                       {isMe && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteOwn(msg.id || msg._id)}
-                          title="Delete message"
-                          className="rounded p-0.5 transition hover:text-rose-400"
-                        >
-                          <Trash2 size={11} />
-                        </button>
+                        confirmDeleteId === msgId ? (
+                          <div
+                            role="alert"
+                            aria-label="Confirm message deletion"
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-300/40 bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-white shadow-2xs"
+                          >
+                            <span className="opacity-95">Delete?</span>
+                            <button
+                              type="button"
+                              disabled={deletingId === msgId}
+                              onClick={() => handleDeleteOwn(msgId)}
+                              aria-label="Confirm delete message"
+                              className="rounded px-1.5 py-0.5 bg-rose-600 text-white transition hover:bg-rose-700 cursor-pointer disabled:opacity-50"
+                            >
+                              {deletingId === msgId ? "..." : "Yes"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingId === msgId}
+                              onClick={() => setConfirmDeleteId(null)}
+                              aria-label="Cancel delete message"
+                              className="rounded px-1.5 py-0.5 text-white/90 transition hover:text-white hover:underline cursor-pointer"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(msgId)}
+                            title="Delete message"
+                            aria-label="Delete message"
+                            className="rounded p-0.5 transition hover:text-rose-400 cursor-pointer"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )
                       )}
                     </div>
                   </div>

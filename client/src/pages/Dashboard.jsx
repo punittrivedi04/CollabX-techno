@@ -242,9 +242,9 @@ export default function Dashboard() {
   };
 
   const getProgressBarFill = (progress) => {
-    if (progress === 100) return "bg-neutral-950 dark:bg-white";
-    if (progress >= 40) return "bg-neutral-700 dark:bg-neutral-300";
-    return "bg-neutral-400 dark:bg-neutral-600";
+    if (progress >= 75) return "bg-green-600 dark:bg-green-500";
+    if (progress >= 40) return "bg-orange-500 dark:bg-orange-400";
+    return "bg-red-600 dark:bg-red-500";
   };
 
   const getPriorityClass = (priority) => {
@@ -290,7 +290,10 @@ export default function Dashboard() {
   };
 
   const greenButtonClass =
-    "inline-flex items-center justify-center gap-1.5 rounded-full bg-[#1E6B4B] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#15803D] dark:bg-[#22C55E] dark:text-[#090D0B] dark:hover:bg-[#A3E635]";
+    "inline-flex items-center justify-center gap-1.5 rounded-full bg-[#141715] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a]";
+
+  const overviewActionButtonClass =
+    "inline-flex items-center justify-center gap-1.5 rounded-full bg-[#141715] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] group-hover:bg-[#1b5e3a] dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a] dark:group-hover:bg-[#1b5e3a]";
 
   const neutralOutlineBtnClass =
     "inline-flex items-center justify-center gap-1.5 rounded-full border border-black/15 bg-white px-4 py-2 text-xs font-bold text-neutral-900 shadow-2xs transition-all duration-200 hover:cursor-pointer hover:border-black/35 hover:bg-neutral-50 dark:border-white/15 dark:bg-[#101014] dark:text-white dark:hover:border-white/35 dark:hover:bg-[#18181E]";
@@ -370,7 +373,7 @@ export default function Dashboard() {
                 <span className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                   WORKSPACE OUTPUT
                 </span>
-                <span className={greenButtonClass}>
+                <span className={overviewActionButtonClass}>
                   <span>Projects</span>
                   <ArrowUpRight size={13} strokeWidth={1.85} />
                 </span>
@@ -424,7 +427,7 @@ export default function Dashboard() {
                 <span className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
                   SQUAD &amp; ALERTS
                 </span>
-                <span className={greenButtonClass}>
+                <span className={overviewActionButtonClass}>
                   <span>Team</span>
                   <ArrowUpRight size={13} strokeWidth={1.85} />
                 </span>
@@ -481,7 +484,7 @@ export default function Dashboard() {
               </div>
 
               {!isDirector && (
-                <Link to="/tasks" className={greenButtonClass}>
+                <Link to="/tasks" className={overviewActionButtonClass}>
                   <span>Manage Tasks</span>
                   <ArrowUpRight size={14} strokeWidth={1.85} />
                 </Link>
@@ -600,7 +603,7 @@ export default function Dashboard() {
                                 href={project.demoUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 rounded-full bg-[#1E6B4B] px-3 py-1 text-[11px] font-bold text-white transition-all duration-200 hover:cursor-pointer hover:bg-[#15803D] dark:bg-[#22C55E] dark:text-[#090D0B] dark:hover:bg-[#A3E635]"
+                                className="inline-flex items-center gap-1 rounded-full bg-[#141715] px-3 py-1 text-[11px] font-bold text-white transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] hover:text-white dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a] dark:hover:text-white"
                               >
                                 <span>View Demo</span>
                                 <ArrowUpRight size={12} strokeWidth={1.85} />
@@ -647,15 +650,15 @@ export default function Dashboard() {
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-black/10 pt-4 text-xs font-medium text-neutral-500 dark:border-white/10 dark:text-neutral-400">
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-neutral-950 dark:bg-white" />
-                <span>100% Done</span>
+                <span className="h-2.5 w-2.5 rounded-full bg-green-600 dark:bg-green-500" />
+                <span>75%+ Done</span>
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-neutral-700 dark:bg-neutral-300" />
+                <span className="h-2.5 w-2.5 rounded-full bg-orange-500 dark:bg-orange-400" />
                 <span>40%+ Active</span>
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-neutral-400 dark:bg-neutral-600" />
+                <span className="h-2.5 w-2.5 rounded-full bg-red-600 dark:bg-red-500" />
                 <span>&lt;40% Early</span>
               </span>
             </div>

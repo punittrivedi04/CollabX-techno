@@ -74,8 +74,12 @@ export const updateUserProfile = async (req, res, next) => {
             newName = name.trim();
         }
 
+        const userRole = String(current.role || "").toLowerCase().trim();
+        const isStudentOrMentor = userRole === "student" || userRole === "mentor" || userRole === "faculty";
+        const isMentorUser = userRole === "mentor" || userRole === "faculty";
+
         let newRollNo = current.roll_no;
-        if (roll_no !== undefined) {
+        if (roll_no !== undefined && isStudentOrMentor) {
             if (roll_no === null || roll_no === "") {
                 newRollNo = null;
             } else {
@@ -84,13 +88,17 @@ export const updateUserProfile = async (req, res, next) => {
                     if (!/^[A-Z0-9]+$/.test(cleanRoll)) {
                         return res.status(400).json({
                             success: false,
-                            message: "Roll number must be alphanumeric (uppercase letters and numbers only)",
+                            message: isMentorUser
+                                ? "Enrollment number must be alphanumeric (uppercase letters and numbers only)"
+                                : "Roll number must be alphanumeric (uppercase letters and numbers only)",
                         });
                     }
                     if (cleanRoll.length > 50) {
                         return res.status(400).json({
                             success: false,
-                            message: "Roll number cannot exceed 50 characters",
+                            message: isMentorUser
+                                ? "Enrollment number cannot exceed 50 characters"
+                                : "Roll number cannot exceed 50 characters",
                         });
                     }
                     newRollNo = cleanRoll;

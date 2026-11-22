@@ -48,6 +48,7 @@ import MentorAnnouncements from "./pages/mentor/MentorAnnouncements";
 // Director Executive Portal Pages
 import DirectorOverview from "./pages/director/DirectorOverview";
 import DirectorReports from "./pages/director/DirectorReports";
+import DirectorStudentDetail from "./pages/director/DirectorStudentDetail";
 
 function RoleHomeRedirect() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -78,11 +79,15 @@ function App() {
           {/* Protected workspace */}
           <Route element={<ProtectedRoute />}>
             <Route element={<DashboardLayout />}>
+              {/* Student & Admin Shared Operational Pages */}
+              <Route element={<RoleGuard allowedRoles={["student", "admin"]} />}>
+                <Route path="/projects" element={<Projects />} />
+                <Route path="/tasks" element={<Tasks />} />
+              </Route>
+
               {/* Student Portal (100% intact) */}
               <Route element={<RoleGuard allowedRoles={["student"]} />}>
                 <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/projects" element={<Projects />} />
-                <Route path="/tasks" element={<Tasks />} />
                 <Route path="/team" element={<Team />} />
                 <Route path="/activity" element={<Activity />} />
                 <Route path="/developer-assist" element={<DeveloperAssist />} />
@@ -115,6 +120,7 @@ function App() {
               {/* Director Executive Portal (Read-Only, Zero Chat) */}
               <Route element={<RoleGuard allowedRoles={["director"]} />}>
                 <Route path="/director" element={<DirectorOverview />} />
+                <Route path="/director/students/:id" element={<DirectorStudentDetail />} />
                 <Route path="/director/reports" element={<DirectorReports />} />
               </Route>
 

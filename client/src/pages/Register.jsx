@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { getHomeRouteForUser } from "../utils/roles";
 import {
   Eye,
   EyeOff,
@@ -209,7 +210,8 @@ export default function Register() {
         });
         return;
       }
-      navigate("/dashboard", { replace: true });
+      const homeRoute = getHomeRouteForUser(res?.user) || "/dashboard";
+      navigate(homeRoute, { replace: true });
     } catch (err) {
       const data = err?.response?.data;
       setErrorCode(data?.code || "");
@@ -222,7 +224,7 @@ export default function Register() {
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-x-hidden bg-[#EBF1EC] px-3.5 py-6 text-[#141A18] sm:px-6 sm:py-10">
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#EBF1EC] px-3.5 py-6 text-[#141A18] sm:px-6 sm:py-10">
       {/* Subtle Sage-Lime Architectural Grid & Soft Ambient Glow */}
       <div
         className="pointer-events-none absolute inset-0"
@@ -253,7 +255,7 @@ export default function Register() {
             to="/register"
             className="inline-flex shrink-0 items-baseline py-1 text-base font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-80 sm:text-lg"
           >
-            <span>collabx</span>
+            <span>CollabX</span>
             <span className="text-[#1E6B4B]">.</span>
           </Link>
 
@@ -378,6 +380,12 @@ export default function Register() {
                       className="w-full rounded-2xl border border-[#D5E0D8] bg-[#EFF4F0] py-3 pl-11 pr-4 text-sm font-medium text-[#141A18] outline-none transition placeholder:text-[#8E9E97] focus:border-[#15803D] focus:bg-white focus:ring-2 focus:ring-[#22C55E]/25 sm:py-3.5 sm:pl-12 sm:text-base"
                     />
                   </div>
+                  {form.email.trim().toLowerCase().endsWith("@technonjr.org") && (
+                    <p className="mt-1.5 flex items-center gap-1.5 text-xs font-semibold text-[#1E6B4B]">
+                      <ShieldCheck size={14} className="shrink-0 text-[#22C55E]" />
+                      <span>Techno NJR campus account — instant workspace access upon email verification (no admin approval required).</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -530,6 +538,12 @@ export default function Register() {
                     {targetEmail}
                   </span>
                 </p>
+                {targetEmail.toLowerCase().endsWith("@technonjr.org") && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-[#1E6B4B]">
+                    <ShieldCheck size={14} className="shrink-0 text-[#22C55E]" />
+                    <span>Official campus account — entering your code grants direct access to your workspace.</span>
+                  </p>
+                )}
               </div>
 
               {successMessage && (

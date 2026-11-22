@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Calendar,
+  CheckCircle2,
   Crown,
   ExternalLink,
   FolderKanban,
@@ -62,12 +64,16 @@ function NeutralBadge({ children, className = "" }) {
 export default function DirectorInspectDrawer({
   projectId,
   mentorId,
+  studentId,
   onClose,
   onSelectProject,
   onSelectMentor,
+  onSelectStudent,
 }) {
+  const navigate = useNavigate();
   const [projectData, setProjectData] = useState(null);
   const [mentorData, setMentorData] = useState(null);
+  const [studentData, setStudentData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -135,7 +141,39 @@ export default function DirectorInspectDrawer({
     };
   }, [mentorId]);
 
-  if (!projectId && !mentorId) return null;
+  useEffect(() => {
+    if (!studentId) {
+      setStudentData(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+
+    api
+      .get(`/director/students/${studentId}`)
+      .then((res) => {
+        if (!cancelled) {
+          setStudentData(res.data?.data || res.data || null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(
+            getErrorMessage(err, "Unable to load student executive details."),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  if (!projectId && !mentorId && !studentId) return null;
 
   // ==========================================
   // 1. PROJECT INSPECTION VIEW
@@ -170,7 +208,7 @@ export default function DirectorInspectDrawer({
             "Project Inspection"
           )
         }
-        description="Executive Read-Only Overview · Single Progress Bar · High-Level Deliverables"
+        description="Executive Overview · Single Progress Bar · High-Level Deliverables"
         size="max-w-2xl"
         footer={
           <button
@@ -340,7 +378,24 @@ export default function DirectorInspectDrawer({
 
               <div className="space-y-2 rounded-xl border border-black/10 bg-neutral-50 p-3.5 dark:border-white/10 dark:bg-[#101014]">
                 {p.teamLeader && (
-                  <div className="flex items-center justify-between gap-2 border-b border-black/10 pb-2.5 dark:border-white/10">
+                  <div
+                    onClick={() => {
+                      if (p.teamLeader.id) {
+                        if (onSelectStudent) {
+                          onSelectStudent(p.teamLeader.id);
+                        } else {
+                          onClose?.();
+                          navigate(`/director/students/${p.teamLeader.id}`);
+                        }
+                      }
+                    }}
+                    className={`flex items-center justify-between gap-2 border-b border-black/10 pb-2.5 dark:border-white/10 ${
+                      p.teamLeader.id
+                        ? "cursor-pointer rounded-lg p-1.5 transition hover:bg-white dark:hover:bg-[#14141A]"
+                        : ""
+                    }`}
+                    title={p.teamLeader.id ? "Inspect student details" : undefined}
+                  >
                     <div className="flex min-w-0 items-center gap-2.5">
                       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-black/12 bg-white text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
                         <Crown size={14} strokeWidth={1.85} />
@@ -369,7 +424,22 @@ export default function DirectorInspectDrawer({
                   p.members.map((member) => (
                     <div
                       key={member.id}
-                      className="flex items-center justify-between gap-2 pt-1.5 first:pt-0"
+                      onClick={() => {
+                        if (member.id) {
+                          if (onSelectStudent) {
+                            onSelectStudent(member.id);
+                          } else {
+                            onClose?.();
+                            navigate(`/director/students/${member.id}`);
+                          }
+                        }
+                      }}
+                      className={`flex items-center justify-between gap-2 pt-1.5 first:pt-0 ${
+                        member.id
+                          ? "cursor-pointer rounded-lg p-1.5 transition hover:bg-white dark:hover:bg-[#14141A]"
+                          : ""
+                      }`}
+                      title={member.id ? "Inspect student details" : undefined}
                     >
                       <div className="flex min-w-0 items-center gap-2.5">
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-black/12 bg-white text-[11px] font-bold text-neutral-900 dark:border-white/12 dark:bg-[#08080A] dark:text-white">
@@ -547,4 +617,237 @@ export default function DirectorInspectDrawer({
       ) : null}
     </Modal>
   );
+
+  // ==========================================
+  // 3. STUDENT INSPECTION VIEW
+  // ==========================================
+  if (studentId) {
+    const s = studentData?.student || studentData;
+    const teams = studentData?.teams || studentData?.projects || [];
+    const tasks = studentData?.tasks || [];
+    const tp = studentData?.taskProgress || {};
+    const totalT =
+      typeof tp.total === "number"
+        ? tp.total
+        : typeof tp.totalTasks === "number"
+          ? tp.totalTasks
+          : tasks.length;
+    const compT =
+      typeof tp.completed === "number"
+        ? tp.completed
+        : typeof tp.completedTasks === "number"
+          ? tp.completedTasks
+          : tasks.filter((t) =>
+              ["completed", "done"].includes(
+                String(t.status || "").trim().toLowerCase(),
+              ),
+            ).length;
+    const compRate =
+      typeof tp.completionRate === "number"
+        ? tp.completionRate
+        : totalT > 0
+          ? Math.round((compT / totalT) * 100)
+          : 0;
+
+    return (
+      <Modal
+        open={Boolean(studentId)}
+        onClose={onClose}
+        title={
+          s ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-extrabold text-neutral-950 dark:text-white">
+                {s.name}
+              </span>
+              {s.roll_no && <NeutralBadge>{s.roll_no}</NeutralBadge>}
+              {s.department && <NeutralBadge>{s.department}</NeutralBadge>}
+            </div>
+          ) : (
+            "Student Inspection"
+          )
+        }
+        description="Executive Overview · Task Metrics · Assigned Projects"
+        size="max-w-2xl"
+        footer={
+          <div className="flex w-full items-center justify-between gap-2">
+            {s?.id && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose?.();
+                  navigate(`/director/students/${s.id}`);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-black/12 bg-white px-3.5 py-2 text-xs font-bold text-neutral-900 transition hover:border-black/35 hover:bg-neutral-50 dark:border-white/15 dark:bg-[#08080A] dark:text-white dark:hover:bg-[#141418]"
+              >
+                <span>Full Profile Summary</span>
+                <ExternalLink size={13} strokeWidth={1.85} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className={`${portalSecondaryBtnClass} ml-auto rounded-xl dark:!border-white/15 dark:!bg-[#101014] dark:!text-white`}
+            >
+              Close
+            </button>
+          </div>
+        }
+      >
+        {loading ? (
+          <LoadingState message="Loading student executive overview..." />
+        ) : error ? (
+          <ErrorAlert message={error} />
+        ) : s ? (
+          <div className="space-y-6">
+            <div className="rounded-2xl border border-black/10 bg-neutral-50 p-4 dark:border-white/10 dark:bg-[#101014]">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-black/15 bg-neutral-950 text-base font-extrabold text-white dark:border-white/15 dark:bg-white dark:text-black">
+                  {getInitials(s.name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-base font-extrabold text-neutral-950 dark:text-white">
+                    {s.name}
+                  </p>
+                  <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">
+                    {s.email} {s.phone ? `· ${s.phone}` : ""}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                ["Teams / Projects", teams.length],
+                ["Total Tasks", totalT],
+                ["Completed Tasks", compT],
+                ["Completion Rate", `${compRate}%`],
+              ].map(([label, val]) => (
+                <div
+                  key={label}
+                  className="rounded-xl border border-black/10 bg-neutral-50 p-3.5 dark:border-white/10 dark:bg-[#101014]"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                    {label}
+                  </p>
+                  <p className="mt-1 text-xl font-extrabold tabular-nums text-neutral-950 dark:text-white">
+                    {val}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                  Assigned Teams &amp; Projects
+                </span>
+                <span className="text-xs text-neutral-400">
+                  Click any project to inspect full roster
+                </span>
+              </div>
+
+              {teams.length === 0 ? (
+                <EmptyState
+                  icon={FolderKanban}
+                  title="No projects currently assigned"
+                  description="This student is not currently assigned to any projects."
+                />
+              ) : (
+                <div className="divide-y divide-black/10 overflow-hidden rounded-xl border border-black/10 bg-neutral-50 dark:divide-white/10 dark:border-white/10 dark:bg-[#101014]">
+                  {teams.map((proj) => (
+                    <div
+                      key={proj.id}
+                      onClick={() => onSelectProject?.(proj.id)}
+                      className="group flex cursor-pointer flex-col justify-between gap-3 p-4 transition hover:bg-white dark:hover:bg-[#14141A] sm:flex-row sm:items-center"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-extrabold text-neutral-950 group-hover:underline dark:text-white">
+                            {proj.title}
+                          </p>
+                          {proj.status && (
+                            <NeutralBadge>{proj.status}</NeutralBadge>
+                          )}
+                          {proj.isLeader && (
+                            <NeutralBadge className="border-amber-500/30 text-amber-600 dark:text-amber-400">
+                              Leader
+                            </NeutralBadge>
+                          )}
+                        </div>
+                        <p className="mt-1 truncate text-xs text-neutral-500 dark:text-neutral-400">
+                          {proj.mentor?.name ? `Mentor: ${proj.mentor.name}` : "Faculty Mentor"} · Due {formatDate(proj.deadline)}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-4">
+                        <div className="w-28 text-right">
+                          <p className="text-xs font-extrabold tabular-nums text-neutral-950 dark:text-white">
+                            {proj.progress ?? 0}%
+                          </p>
+                          <div className="mt-1">
+                            <ProgressBar
+                              value={proj.progress ?? 0}
+                              height="h-1.5"
+                            />
+                          </div>
+                        </div>
+
+                        <span className="inline-flex items-center gap-1 rounded-xl border border-black/12 bg-white px-3 py-1 text-xs font-bold text-neutral-800 transition group-hover:border-black/35 group-hover:text-neutral-950 dark:border-white/12 dark:bg-[#08080A] dark:text-neutral-200 dark:group-hover:border-white/35 dark:group-hover:text-white">
+                          Inspect →
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Assigned Tasks */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                  Assigned Tasks ({tasks.length})
+                </span>
+                <span className="text-xs text-neutral-400">
+                  {compT} of {totalT} completed
+                </span>
+              </div>
+
+              {tasks.length === 0 ? (
+                <EmptyState
+                  icon={CheckCircle2}
+                  title="No tasks currently assigned"
+                  description="Tasks assigned to this student will appear here."
+                />
+              ) : (
+                <div className="space-y-2 rounded-xl border border-black/10 bg-neutral-50 p-3.5 dark:border-white/10 dark:bg-[#101014]">
+                  {tasks.slice(0, 10).map((task) => (
+                    <div
+                      key={task.id}
+                      className="flex items-start justify-between gap-2 border-b border-black/5 pb-2 last:border-b-0 last:pb-0 dark:border-white/5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-bold text-neutral-950 dark:text-white">
+                          {task.title}
+                        </p>
+                        <p className="mt-0.5 truncate text-[10px] text-neutral-500 dark:text-neutral-400">
+                          {task.projectTitle || "Project"} · Priority: {task.priority || "Medium"} · Due {formatDate(task.dueDate || task.deadline)}
+                        </p>
+                      </div>
+                      <NeutralBadge>{task.status}</NeutralBadge>
+                    </div>
+                  ))}
+                  {tasks.length > 10 && (
+                    <p className="pt-1 text-center text-[10px] text-neutral-400">
+                      Showing 10 of {tasks.length} tasks
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    );
+  }
 }
