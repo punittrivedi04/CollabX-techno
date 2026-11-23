@@ -409,12 +409,24 @@ export const registerUser = async (req, res, next) => {
         );
 
         // Send branded dark-themed OTP email
-        await sendOtpEmail({
+        const emailResult = await sendOtpEmail({
             to: cleanEmail,
             name: cleanName,
             otp,
             purpose: "signup",
         });
+
+        if (!emailResult?.sent) {
+            console.error(`[Register] Failed to dispatch OTP to ${cleanEmail}:`, emailResult?.reason);
+            return res.status(502).json({
+                success: false,
+                code: "EMAIL_DISPATCH_FAILED",
+                message: "Account created, but failed to deliver verification code to your email. Please try requesting a new code.",
+                reason: process.env.NODE_ENV !== "production" ? emailResult?.reason : undefined,
+                otpToken,
+                email: cleanEmail,
+            });
+        }
 
         return res.status(200).json({
             success: true,
@@ -632,12 +644,22 @@ export const resendOtp = async (req, res, next) => {
             { expiresIn: "2m", algorithm: "HS256" }
         );
 
-        await sendOtpEmail({
+        const emailResult = await sendOtpEmail({
             to: cleanEmail,
             name: user.name,
             otp,
             purpose: safePurpose,
         });
+
+        if (!emailResult?.sent) {
+            console.error(`[ResendOtp] Failed to dispatch OTP to ${cleanEmail}:`, emailResult?.reason);
+            return res.status(502).json({
+                success: false,
+                code: "EMAIL_DISPATCH_FAILED",
+                message: "Unable to send verification code to your email at this moment. Please try again shortly.",
+                reason: process.env.NODE_ENV !== "production" ? emailResult?.reason : undefined,
+            });
+        }
 
         return res.status(200).json({
             success: true,
@@ -690,12 +712,22 @@ export const forgotPassword = async (req, res, next) => {
             { expiresIn: "2m", algorithm: "HS256" }
         );
 
-        await sendOtpEmail({
+        const emailResult = await sendOtpEmail({
             to: cleanEmail,
             name: user.name,
             otp,
             purpose: "reset_password",
         });
+
+        if (!emailResult?.sent) {
+            console.error(`[ForgotPassword] Failed to dispatch OTP to ${cleanEmail}:`, emailResult?.reason);
+            return res.status(502).json({
+                success: false,
+                code: "EMAIL_DISPATCH_FAILED",
+                message: "Unable to send password reset code to your email at this moment. Please try again shortly.",
+                reason: process.env.NODE_ENV !== "production" ? emailResult?.reason : undefined,
+            });
+        }
 
         return res.status(200).json({
             success: true,

@@ -81,8 +81,8 @@ export default function Login() {
       navigate(getHomeRouteForUser(authData?.user), { replace: true });
     } catch (err) {
       const data = err?.response?.data;
-      setErrorCode(data?.code || "");
-      setError(data?.message || "Login failed. Please check your credentials.");
+      setErrorCode(data?.code || err?.code || "");
+      setError(data?.message || err?.message || "Login failed. Please check your credentials.");
     } finally {
       setLoading(false);
     }
@@ -114,8 +114,12 @@ export default function Login() {
       );
     } catch (err) {
       const data = err?.response?.data;
-      setErrorCode(data?.code || "");
-      setError(data?.message || "Failed to send reset code. Please try again.");
+      setErrorCode(data?.code || err?.code || "");
+      setError(
+        data?.message ||
+        err?.message ||
+        "Failed to send reset code. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -133,7 +137,8 @@ export default function Login() {
       setSuccessMessage("A fresh 6-digit code has been sent to your email.");
     } catch (err) {
       const data = err?.response?.data;
-      setError(data?.message || "Failed to resend code. Please try again.");
+      setErrorCode(data?.code || err?.code || "");
+      setError(data?.message || err?.message || "Failed to resend code. Please try again.");
     } finally {
       setResending(false);
     }
@@ -179,8 +184,8 @@ export default function Login() {
       setErrorCode("");
     } catch (err) {
       const data = err?.response?.data;
-      setErrorCode(data?.code || "");
-      setError(data?.message || "Failed to reset password. Please try again.");
+      setErrorCode(data?.code || err?.code || "");
+      setError(data?.message || err?.message || "Failed to reset password. Please try again.");
     } finally {
       setLoading(false);
     }

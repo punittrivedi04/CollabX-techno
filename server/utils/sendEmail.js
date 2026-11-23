@@ -1,5 +1,11 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
+
+const FALLBACK_RESEND_KEY = "re_8H75sYHY_FFbGZcRXxYSED8DtEe8hBL74";
+const FALLBACK_RESEND_FROM = "CollabX <onboarding@resend.dev>";
 
 let cachedTransporter = null;
 let lastSmtpConfig = null;
@@ -12,13 +18,29 @@ const getClientUrl = () => {
     return first.replace(/\/+$/, "");
 };
 
-const getFromAddress = () => {
+const getFromAddress = (isResend = true) => {
+    if (isResend) {
+        return (
+            process.env.RESEND_FROM ||
+            FALLBACK_RESEND_FROM
+        );
+    }
     return (
-        process.env.RESEND_FROM ||
         process.env.EMAIL_FROM ||
         process.env.MAIL_FROM ||
-        "CollabX <onboarding@resend.dev>"
+        FALLBACK_RESEND_FROM
     );
+};
+
+const withTimeout = (promise, ms = 7000, errorMsg = "Email request timed out") => {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(errorMsg)), ms);
+    });
+    return Promise.race([
+        promise.finally(() => clearTimeout(timeoutId)),
+        timeoutPromise,
+    ]);
 };
 
 const getSmtpTransporter = () => {
@@ -41,20 +63,32 @@ const getSmtpTransporter = () => {
             user,
             pass,
         },
+        connectionTimeout: 4000, // 4s max connect timeout (prevents hanging indefinitely on firewalled hosts like Render)
+        greetingTimeout: 4000,   // 4s max greeting timeout
+        socketTimeout: 5000,     // 5s max socket inactivity timeout
     });
     lastSmtpConfig = currentConfigKey;
     return cachedTransporter;
 };
 
 const getResendClient = () => {
-    const apiKey = process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY;
+    const apiKey = (
+        process.env.RESEND_API_KEY ||
+        process.env.EMAIL_API_KEY ||
+        FALLBACK_RESEND_KEY
+    )?.trim();
     if (!apiKey) return null;
     if (cachedResend && lastResendKey === apiKey) {
         return cachedResend;
     }
-    cachedResend = new Resend(apiKey);
-    lastResendKey = apiKey;
-    return cachedResend;
+    try {
+        cachedResend = new Resend(apiKey);
+        lastResendKey = apiKey;
+        return cachedResend;
+    } catch (e) {
+        console.warn("[getResendClient error]", e.message);
+        return null;
+    }
 };
 
 const renderEmailShell = ({
@@ -117,41 +151,87 @@ const renderEmailShell = ({
  */
 export const sendEmail = async ({ to, subject, html, text, bcc }) => {
     try {
-        const from = getFromAddress();
         const resendClient = getResendClient();
         const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 
         if (!resendClient && !hasSmtp) {
             if (process.env.NODE_ENV !== "production") {
                 const recipients = Array.isArray(to) ? to.join(", ") : to || (Array.isArray(bcc) ? bcc.join(", ") : bcc);
-                console.log(`[CollabX Dev Mailer] (No Resend/SMTP in .env) Recipient: ${recipients} | Subject: "${subject}"`);
+                console.log(`[CollabX Dev Mailer] (No Resend/SMTP configured) Recipient: ${recipients} | Subject: "${subject}"`);
             }
-            return { sent: false, reason: "No email transport configured in .env (set RESEND_API_KEY or SMTP_*)" };
+            return { sent: false, reason: "No email transport configured in environment" };
         }
 
         const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
 
+        // 1. Prioritize Resend HTTP REST API (fastest, robust on cloud hosts like Render with firewalled SMTP)
         if (resendClient) {
             const toList = Array.isArray(to) ? to : (to ? [to] : []);
             const bccList = Array.isArray(bcc) ? bcc : (bcc ? [bcc] : undefined);
-            const { data, error } = await resendClient.emails.send({
-                from,
-                to: toList.length > 0 ? toList : [from],
-                bcc: bccList,
-                subject,
-                html,
-                text: plainText,
-            });
+            let sendFrom = getFromAddress(true);
 
-            if (error) {
-                console.warn("[CollabX Resend Notice]", error.message);
-                return { sent: false, reason: error.message };
+            let resendResponse;
+            try {
+                resendResponse = await withTimeout(
+                    resendClient.emails.send({
+                        from: sendFrom,
+                        to: toList.length > 0 ? toList : [sendFrom],
+                        bcc: bccList,
+                        subject,
+                        html,
+                        text: plainText,
+                    }),
+                    7000,
+                    "Resend API request timed out after 7000ms"
+                );
+            } catch (timeoutOrErr) {
+                console.warn("[CollabX Resend Exception]", timeoutOrErr.message);
+                resendResponse = { error: timeoutOrErr };
             }
-            return { sent: true, emailId: data?.id, transport: "resend" };
+
+            // Auto-heal: If custom sender domain fails verification, retry with verified onboarding sender
+            if (
+                resendResponse?.error &&
+                sendFrom !== FALLBACK_RESEND_FROM &&
+                (resendResponse.error.message?.includes("domain is not verified") ||
+                 resendResponse.error.message?.includes("validation_error") ||
+                 resendResponse.error.message?.includes("not verified"))
+            ) {
+                console.warn(`[CollabX Resend] Domain "${sendFrom}" unverified. Retrying with fallback sender "${FALLBACK_RESEND_FROM}"...`);
+                try {
+                    resendResponse = await withTimeout(
+                        resendClient.emails.send({
+                            from: FALLBACK_RESEND_FROM,
+                            to: toList.length > 0 ? toList : [FALLBACK_RESEND_FROM],
+                            bcc: bccList,
+                            subject,
+                            html,
+                            text: plainText,
+                        }),
+                        7000,
+                        "Resend API retry timed out after 7000ms"
+                    );
+                } catch (retryErr) {
+                    resendResponse = { error: retryErr };
+                }
+            }
+
+            if (!resendResponse?.error && resendResponse?.data) {
+                return { sent: true, emailId: resendResponse.data.id, transport: "resend" };
+            }
+
+            console.warn("[CollabX Resend Failure]", resendResponse?.error?.message || "Unknown Resend error");
+
+            // Only attempt SMTP fallback if SMTP is explicitly configured
+            if (!hasSmtp) {
+                return { sent: false, reason: resendResponse?.error?.message || "Resend email delivery failed" };
+            }
         }
 
+        // 2. Fallback to SMTP if Resend was unavailable or failed and SMTP is configured
         if (hasSmtp) {
             const transporter = getSmtpTransporter();
+            const from = getFromAddress(false);
             const mailOptions = {
                 from,
                 to: to || undefined,
@@ -160,7 +240,11 @@ export const sendEmail = async ({ to, subject, html, text, bcc }) => {
                 html,
                 text: plainText,
             };
-            const info = await transporter.sendMail(mailOptions);
+            const info = await withTimeout(
+                transporter.sendMail(mailOptions),
+                7000,
+                "SMTP dispatch timed out after 7000ms"
+            );
             return { sent: true, messageId: info?.messageId, transport: "smtp" };
         }
 

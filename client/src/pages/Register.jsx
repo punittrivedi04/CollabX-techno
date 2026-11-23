@@ -113,9 +113,9 @@ export default function Register() {
       setTimeout(() => inputRefs.current[0]?.focus(), 150);
     } catch (err) {
       const data = err?.response?.data;
-      setErrorCode(data?.code || "");
+      setErrorCode(data?.code || err?.code || "");
       setError(
-        data?.message || "Registration failed. Please check your details.",
+        data?.message || err?.message || "Registration failed. Please check your details.",
       );
     } finally {
       setLoading(false);
@@ -175,7 +175,8 @@ export default function Register() {
       setTimeout(() => inputRefs.current[0]?.focus(), 100);
     } catch (err) {
       const data = err?.response?.data;
-      setError(data?.message || "Failed to resend code. Please try again.");
+      setErrorCode(data?.code || err?.code || "");
+      setError(data?.message || err?.message || "Failed to resend code. Please try again.");
     } finally {
       setResending(false);
     }
@@ -214,9 +215,9 @@ export default function Register() {
       navigate(homeRoute, { replace: true });
     } catch (err) {
       const data = err?.response?.data;
-      setErrorCode(data?.code || "");
+      setErrorCode(data?.code || err?.code || "");
       setError(
-        data?.message || "Verification failed. Please check the code.",
+        data?.message || err?.message || "Verification failed. Please check the code.",
       );
     } finally {
       setLoading(false);
