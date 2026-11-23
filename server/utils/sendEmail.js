@@ -14,9 +14,9 @@ const getClientUrl = () => {
 
 const getFromAddress = () => {
     return (
+        process.env.RESEND_FROM ||
         process.env.EMAIL_FROM ||
         process.env.MAIL_FROM ||
-        process.env.RESEND_FROM ||
         "CollabX <onboarding@resend.dev>"
     );
 };
@@ -41,12 +41,6 @@ const getSmtpTransporter = () => {
             user,
             pass,
         },
-        tls: {
-            rejectUnauthorized: false,
-        },
-        connectionTimeout: 15000,
-        greetingTimeout: 10000,
-        socketTimeout: 20000,
     });
     lastSmtpConfig = currentConfigKey;
     return cachedTransporter;
@@ -116,40 +110,26 @@ const renderEmailShell = ({
 `;
 
 /**
- * Universal core email sender.
- * Tries SMTP first if SMTP_HOST & SMTP_USER & SMTP_PASS are set.
- * Otherwise uses Resend API if RESEND_API_KEY / EMAIL_API_KEY is set.
- * If neither is configured, logs non-blocking dev notice and returns gracefully.
+- Universal core email sender.
+- Tries Resend API first if RESEND_API_KEY / EMAIL_API_KEY is set.
+- Otherwise uses SMTP if SMTP_HOST & SMTP_USER & SMTP_PASS are set.
+- If neither is configured, logs non-blocking dev notice and returns gracefully.
  */
 export const sendEmail = async ({ to, subject, html, text, bcc }) => {
     try {
         const from = getFromAddress();
+        const resendClient = getResendClient();
         const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
-        const resendClient = !hasSmtp ? getResendClient() : null;
 
-        if (!hasSmtp && !resendClient) {
+        if (!resendClient && !hasSmtp) {
             if (process.env.NODE_ENV !== "production") {
                 const recipients = Array.isArray(to) ? to.join(", ") : to || (Array.isArray(bcc) ? bcc.join(", ") : bcc);
-                console.log(`[CollabX Dev Mailer] (No SMTP/Resend in .env) Recipient: ${recipients} | Subject: "${subject}"`);
+                console.log(`[CollabX Dev Mailer] (No Resend/SMTP in .env) Recipient: ${recipients} | Subject: "${subject}"`);
             }
-            return { sent: false, reason: "No email transport configured in .env (set SMTP_* or RESEND_API_KEY)" };
+            return { sent: false, reason: "No email transport configured in .env (set RESEND_API_KEY or SMTP_*)" };
         }
 
         const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
-
-        if (hasSmtp) {
-            const transporter = getSmtpTransporter();
-            const mailOptions = {
-                from,
-                to: to || undefined,
-                bcc: bcc || undefined,
-                subject,
-                html,
-                text: plainText,
-            };
-            const info = await transporter.sendMail(mailOptions);
-            return { sent: true, messageId: info?.messageId, transport: "smtp" };
-        }
 
         if (resendClient) {
             const toList = Array.isArray(to) ? to : (to ? [to] : []);
@@ -170,6 +150,20 @@ export const sendEmail = async ({ to, subject, html, text, bcc }) => {
             return { sent: true, emailId: data?.id, transport: "resend" };
         }
 
+        if (hasSmtp) {
+            const transporter = getSmtpTransporter();
+            const mailOptions = {
+                from,
+                to: to || undefined,
+                bcc: bcc || undefined,
+                subject,
+                html,
+                text: plainText,
+            };
+            const info = await transporter.sendMail(mailOptions);
+            return { sent: true, messageId: info?.messageId, transport: "smtp" };
+        }
+
         return { sent: false, reason: "No active email transport" };
     } catch (err) {
         console.warn("[CollabX Email Notice]", err.message);
@@ -178,7 +172,7 @@ export const sendEmail = async ({ to, subject, html, text, bcc }) => {
 };
 
 /**
- * 1. OTP Verification Email (Signup, Password Reset, Email Verification)
+- 1. OTP Verification Email (Signup, Password Reset, Email Verification)
  */
 export const sendOtpEmail = async ({ to, name = "CollabX User", otp, purpose = "signup" }) => {
     try {
@@ -236,7 +230,7 @@ export const sendOtpEmail = async ({ to, name = "CollabX User", otp, purpose = "
 };
 
 /**
- * 2. Welcome Email on Account Creation
+- 2. Welcome Email on Account Creation
  */
 export const sendWelcomeEmail = async ({ to, name = "CollabX User", role = "student" }) => {
     try {
@@ -269,7 +263,7 @@ export const sendWelcomeEmail = async ({ to, name = "CollabX User", role = "stud
 
             <div style="text-align: center; margin: 30px 0 10px;">
                 <a href="${clientUrl}/login" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 700; letter-spacing: 0.5px;">
-                    Open CollabX Workspace &rarr;
+                    Open CollabX Workspace →
                 </a>
             </div>
         `;
@@ -288,7 +282,7 @@ export const sendWelcomeEmail = async ({ to, name = "CollabX User", role = "stud
 };
 
 /**
- * 3. Account Approved & Activated Email (Sent after Admin reviews & classifies account)
+- 3. Account Approved & Activated Email (Sent after Admin reviews & classifies account)
  */
 export const sendAccountApprovalEmail = async ({ to, name = "CollabX User", role = "student" }) => {
     try {
@@ -323,7 +317,7 @@ export const sendAccountApprovalEmail = async ({ to, name = "CollabX User", role
 
             <div style="text-align: center; margin: 30px 0 15px;">
                 <a href="${clientUrl}/login" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 700;">
-                    Log In to CollabX &rarr;
+                    Log In to CollabX →
                 </a>
             </div>
         `;
@@ -342,9 +336,9 @@ export const sendAccountApprovalEmail = async ({ to, name = "CollabX User", role
 };
 
 /**
- * 4. Announcement Email (Campus / Team Announcements)
- * Supports single email or an array of recipient emails.
- * When multiple recipients are specified, batches them safely via BCC so user emails are never disclosed.
+- 4. Announcement Email (Campus / Team Announcements)
+- Supports single email or an array of recipient emails.
+- When multiple recipients are specified, batches them safely via BCC so user emails are never disclosed.
  */
 export const sendAnnouncementEmail = async ({
     to,
@@ -387,7 +381,7 @@ export const sendAnnouncementEmail = async ({
 
             <div style="text-align: center; margin: 28px 0 10px;">
                 <a href="${clientUrl}/dashboard" style="display: inline-block; background-color: #27272a; border: 1px solid #3f3f46; color: #ffffff; text-decoration: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600;">
-                    Open CollabX Dashboard &rarr;
+                    Open CollabX Dashboard →
                 </a>
             </div>
         `;
@@ -432,7 +426,7 @@ export const sendAnnouncementEmail = async ({
 };
 
 /**
- * 5. General Notification Email
+- 5. General Notification Email
  */
 export const sendNotificationEmail = async ({
     to,
@@ -450,7 +444,7 @@ export const sendNotificationEmail = async ({
             ${link ? `
             <div style="text-align: center; margin: 25px 0 10px;">
                 <a href="${link}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 700;">
-                    ${linkText} &rarr;
+                    ${linkText} →
                 </a>
             </div>
             ` : ""}
@@ -470,7 +464,7 @@ export const sendNotificationEmail = async ({
 };
 
 /**
- * 6. Team & Mentor Invitation Email
+- 6. Team & Mentor Invitation Email
  */
 export const sendInvitationEmail = async ({
     to,
@@ -507,7 +501,7 @@ export const sendInvitationEmail = async ({
 
             <div style="text-align: center; margin: 28px 0 15px;">
                 <a href="${invitationUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 700;">
-                    Accept Invitation & Join &rarr;
+                    Accept Invitation & Join →
                 </a>
             </div>
 
