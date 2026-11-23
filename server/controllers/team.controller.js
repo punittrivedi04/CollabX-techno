@@ -1194,19 +1194,40 @@ export const removeTeamMember = async (req, res, next) => {
             });
         }
 
-        await pool.query(
-            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
-            [projectId, memberId]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN;");
 
-        // Explicitly unassign any tasks belonging to this project assigned to the removed member
-        await pool.query(
-            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
-            [projectId, memberId]
-        );
+            await client.query(
+                "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+                [projectId, memberId]
+            );
+
+            // Explicitly unassign any tasks belonging to this project assigned to the removed member inside same transaction
+            await client.query(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+                [projectId, memberId]
+            );
+
+            await client.query("COMMIT;");
+        } catch (txErr) {
+            await client.query("ROLLBACK;");
+            throw txErr;
+        } finally {
+            client.release();
+        }
 
         invalidateAllCaches();
         evictUserFromProjectRooms(req, projectId, memberId);
+
+        const io = req.app.get("io");
+        if (io) {
+            io.to(`user:${memberId}`).emit("collabx_tasks_updated", { projectId, memberId, action: "removed" });
+            io.to(`user:${memberId}`).emit("collabx_projects_updated", { projectId, memberId, action: "removed" });
+            io.to(`user:${memberId}`).emit("collabx_team_updated", { projectId, memberId, action: "removed" });
+            io.to(`project_${projectId}_official`).emit("collabx_tasks_updated", { projectId, memberId, action: "unassigned" });
+            io.to(`project_${projectId}_official`).emit("collabx_team_updated", { projectId, memberId });
+        }
 
         return res.status(200).json({
             success: true,
@@ -1265,23 +1286,35 @@ export const removeProjectMentor = async (req, res, next) => {
         const removedMentorId = project.mentor_id;
         const removedMentorName = project.mentor_name || "Faculty Mentor";
 
-        // Unassign mentor from project
-        await pool.query(
-            "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE id = $1",
-            [projectId]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN;");
 
-        // Explicitly unassign any tasks belonging to this project assigned to the removed mentor
-        await pool.query(
-            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
-            [projectId, removedMentorId]
-        );
+            // Unassign mentor from project inside same transaction
+            await client.query(
+                "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE id = $1",
+                [projectId]
+            );
 
-        // Cancel any pending mentor invitations for this project
-        await pool.query(
-            "UPDATE invitations SET status = 'Rejected' WHERE project_id = $1 AND role = 'mentor' AND status = 'Pending'",
-            [projectId]
-        );
+            // Explicitly unassign any tasks belonging to this project assigned to the removed mentor
+            await client.query(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+                [projectId, removedMentorId]
+            );
+
+            // Cancel any pending mentor invitations for this project
+            await client.query(
+                "UPDATE invitations SET status = 'Rejected' WHERE project_id = $1 AND role = 'mentor' AND status = 'Pending'",
+                [projectId]
+            );
+
+            await client.query("COMMIT;");
+        } catch (txErr) {
+            await client.query("ROLLBACK;");
+            throw txErr;
+        } finally {
+            client.release();
+        }
 
         // Evict previous mentor from real-time project rooms
         evictUserFromProjectRooms(req, projectId, removedMentorId);
@@ -1357,6 +1390,14 @@ export const removeProjectMentor = async (req, res, next) => {
 
         invalidateAllCaches();
 
+        if (io) {
+            io.to(`user:${removedMentorId}`).emit("collabx_tasks_updated", { projectId, mentorId: removedMentorId, action: "mentor_removed" });
+            io.to(`user:${removedMentorId}`).emit("collabx_projects_updated", { projectId, mentorId: removedMentorId, action: "mentor_removed" });
+            io.to(`user:${removedMentorId}`).emit("collabx_team_updated", { projectId, mentorId: removedMentorId, action: "mentor_removed" });
+            io.to(`project_${projectId}_official`).emit("collabx_tasks_updated", { projectId, action: "mentor_removed" });
+            io.to(`project_${projectId}_official`).emit("collabx_team_updated", { projectId, action: "mentor_removed" });
+        }
+
         return res.status(200).json({
             success: true,
             message: `Faculty Mentor ${removedMentorName} has been removed. The project currently has no mentor assigned.`,
@@ -1394,19 +1435,40 @@ export const leaveProject = async (req, res, next) => {
             });
         }
 
-        await pool.query(
-            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
-            [projectId, userId]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN;");
 
-        // Explicitly unassign any tasks belonging to this project assigned to the departing member
-        await pool.query(
-            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
-            [projectId, userId]
-        );
+            await client.query(
+                "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+                [projectId, userId]
+            );
+
+            // Explicitly unassign any tasks belonging to this project assigned to the departing member inside same transaction
+            await client.query(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+                [projectId, userId]
+            );
+
+            await client.query("COMMIT;");
+        } catch (txErr) {
+            await client.query("ROLLBACK;");
+            throw txErr;
+        } finally {
+            client.release();
+        }
 
         invalidateAllCaches();
         evictUserFromProjectRooms(req, projectId, userId);
+
+        const io = req.app.get("io");
+        if (io) {
+            io.to(`user:${userId}`).emit("collabx_tasks_updated", { projectId, userId, action: "left" });
+            io.to(`user:${userId}`).emit("collabx_projects_updated", { projectId, userId, action: "left" });
+            io.to(`user:${userId}`).emit("collabx_team_updated", { projectId, userId, action: "left" });
+            io.to(`project_${projectId}_official`).emit("collabx_tasks_updated", { projectId, userId, action: "unassigned" });
+            io.to(`project_${projectId}_official`).emit("collabx_team_updated", { projectId, userId });
+        }
 
         return res.status(200).json({
             success: true,

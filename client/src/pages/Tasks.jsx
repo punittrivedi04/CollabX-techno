@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Plus,
@@ -140,7 +140,7 @@ export default function Tasks() {
     };
   }, [showModal]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (isDirector) {
       setLoading(false);
       return;
@@ -155,18 +155,57 @@ export default function Tasks() {
         api.get("/projects"),
       ]);
 
-      setTasks(taskResponse.data.tasks || []);
-      setProjects(projectResponse.data.projects || []);
+      const fetchedTasks = taskResponse.data.tasks || [];
+      const fetchedProjects = projectResponse.data.projects || [];
+
+      setTasks(fetchedTasks);
+      setProjects(fetchedProjects);
+
+      // Reset project filter if the selected project is no longer in active projects
+      setProjectFilter((prev) => {
+        if (prev === "All") return prev;
+        const exists = fetchedProjects.some(
+          (p) => String(p._id || p.id) === String(prev),
+        );
+        return exists ? prev : "All";
+      });
+
+      // Reset form projectId if the selected project is no longer valid
+      if (fetchedProjects.length > 0) {
+        setForm((prevForm) => {
+          if (!prevForm.projectId) return prevForm;
+          const stillValid = fetchedProjects.some(
+            (p) => String(p._id || p.id) === String(prevForm.projectId),
+          );
+          return stillValid
+            ? prevForm
+            : { ...prevForm, projectId: fetchedProjects[0]?._id || fetchedProjects[0]?.id || "", assignedTo: "" };
+        });
+      }
     } catch (err) {
       setError(getError(err));
     } finally {
       setLoading(false);
     }
-  };
+  }, [isDirector]);
 
   useEffect(() => {
     loadData();
-  }, [isDirector]);
+
+    const handleDataRefresh = () => {
+      loadData();
+    };
+
+    window.addEventListener("collabx_tasks_updated", handleDataRefresh);
+    window.addEventListener("collabx_projects_updated", handleDataRefresh);
+    window.addEventListener("collabx_team_updated", handleDataRefresh);
+
+    return () => {
+      window.removeEventListener("collabx_tasks_updated", handleDataRefresh);
+      window.removeEventListener("collabx_projects_updated", handleDataRefresh);
+      window.removeEventListener("collabx_team_updated", handleDataRefresh);
+    };
+  }, [loadData]);
 
   const filteredTasks = useMemo(() => {
     const term = search.toLowerCase();

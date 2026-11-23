@@ -15,6 +15,30 @@ const attachNotificationBridge = (socketInstance) => {
             })
         );
     });
+
+    socketInstance.on("collabx_tasks_updated", (detail) => {
+        window.dispatchEvent(
+            new CustomEvent("collabx_tasks_updated", {
+                detail,
+            })
+        );
+    });
+
+    socketInstance.on("collabx_projects_updated", (detail) => {
+        window.dispatchEvent(
+            new CustomEvent("collabx_projects_updated", {
+                detail,
+            })
+        );
+    });
+
+    socketInstance.on("collabx_team_updated", (detail) => {
+        window.dispatchEvent(
+            new CustomEvent("collabx_team_updated", {
+                detail,
+            })
+        );
+    });
 };
 
 export const connectSocket = (token) => {

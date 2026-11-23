@@ -61,21 +61,40 @@ export const syncLeaderboardOnTaskChange = async (projectId, io) => {
 };
 
 const hasTaskAccess = async (task, user) => {
+    if (!task || !user) return false;
     const userId = Number(user.id);
     const role = String(user.role || "").toLowerCase();
     const isAdmin = role === "admin" || role === "coordinator";
     if (isAdmin) return true;
-    if (
-        Number(task.assigned_to) === userId ||
-        Number(task.created_by) === userId ||
-        Number(task.project_owner_id) === userId ||
-        Number(task.project_mentor_id) === userId
-    ) {
+
+    if (role === "director" || isDirector(user)) return false;
+
+    const projectId = task.project_id;
+    if (!projectId) return false;
+
+    // Check project owner and mentor
+    let ownerId = task.project_owner_id !== undefined ? Number(task.project_owner_id) : null;
+    let mentorId = task.project_mentor_id !== undefined ? Number(task.project_mentor_id) : null;
+
+    if (ownerId === null && mentorId === null) {
+        const projRes = await pool.query(
+            "SELECT owner_id, mentor_id FROM projects WHERE id = $1",
+            [projectId]
+        );
+        if (projRes.rows.length > 0) {
+            ownerId = Number(projRes.rows[0].owner_id);
+            mentorId = Number(projRes.rows[0].mentor_id);
+        }
+    }
+
+    if (ownerId === userId || mentorId === userId) {
         return true;
     }
+
+    // Must be an active member of the project in project_members
     const memberCheck = await pool.query(
         "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
-        [task.project_id, userId]
+        [projectId, userId]
     );
     return memberCheck.rows.length > 0;
 };
@@ -230,13 +249,18 @@ export const createTask = async (req, res, next) => {
 
         if (assigneeId) {
             const assigneeCheck = await pool.query(
-                "SELECT id FROM users WHERE id = $1 AND is_active = TRUE",
-                [assigneeId]
+                `SELECT u.id FROM users u
+                 WHERE u.id = $1 AND u.is_active = TRUE
+                   AND (
+                       $1 = $2 OR $1 = $3 OR
+                       EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = $4 AND pm.user_id = $1)
+                   );`,
+                [assigneeId, project.owner_id, project.mentor_id, projId]
             );
             if (assigneeCheck.rows.length === 0) {
                 return res.status(400).json({
                     success: false,
-                    message: "Assigned user does not exist or is inactive",
+                    message: "Assigned user does not exist, is inactive, or is not an active member of this project",
                 });
             }
         }
@@ -332,6 +356,24 @@ export const getTasks = async (req, res, next) => {
                     message: "Valid projectId filter is required",
                 });
             }
+
+            if (!hasArchivedOversight) {
+                const accessRes = await pool.query(
+                    `SELECT 1 FROM projects p
+                     WHERE p.id = $1 AND (
+                         p.owner_id = $2 OR
+                         p.mentor_id = $2 OR
+                         EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = $2)
+                     );`,
+                    [parsedProjectId, userId]
+                );
+                if (accessRes.rows.length === 0) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You do not have permission to view tasks for this project",
+                    });
+                }
+            }
         }
 
         const normalizedStatus = status ? normalizeStatus(status) : "";
@@ -348,8 +390,6 @@ export const getTasks = async (req, res, next) => {
                 LEFT JOIN users u_creator ON t.created_by = u_creator.id
                 WHERE (
                     $1::boolean = TRUE OR
-                    t.assigned_to = $2 OR
-                    t.created_by = $2 OR
                     p.owner_id = $2 OR
                     p.mentor_id = $2 OR
                     p.id IN (SELECT project_id FROM project_members WHERE user_id = $2)
@@ -569,13 +609,18 @@ export const updateTask = async (req, res, next) => {
                     });
                 }
                 const assigneeCheck = await pool.query(
-                    "SELECT id FROM users WHERE id = $1 AND is_active = TRUE",
-                    [parsedAssignee]
+                    `SELECT u.id FROM users u
+                     WHERE u.id = $1 AND u.is_active = TRUE
+                       AND (
+                           $1 = $2 OR $1 = $3 OR
+                           EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = $4 AND pm.user_id = $1)
+                       );`,
+                    [parsedAssignee, existingTask.project_owner_id, existingTask.project_mentor_id, existingTask.project_id]
                 );
                 if (assigneeCheck.rows.length === 0) {
                     return res.status(400).json({
                         success: false,
-                        message: "Assigned user does not exist or is inactive",
+                        message: "Assigned user does not exist, is inactive, or is not an active member of this project",
                     });
                 }
                 newAssignedTo = parsedAssignee;

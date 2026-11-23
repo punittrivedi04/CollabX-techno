@@ -2865,23 +2865,36 @@ export const removeAdminTeamMember = async (req, res, next) => {
         );
         const memberName = userRes.rows[0]?.name || `User #${memberId}`;
 
-        const delRes = await pool.query(
-            "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING user_id;",
-            [projectId, memberId]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN;");
 
-        if (delRes.rowCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "User is not a member of this project.",
-            });
+            const delRes = await client.query(
+                "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING user_id;",
+                [projectId, memberId]
+            );
+
+            if (delRes.rowCount === 0) {
+                await client.query("ROLLBACK;");
+                return res.status(404).json({
+                    success: false,
+                    message: "User is not a member of this project.",
+                });
+            }
+
+            // Unassign active project tasks for this member inside same transaction
+            await client.query(
+                "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
+                [projectId, memberId]
+            );
+
+            await client.query("COMMIT;");
+        } catch (txErr) {
+            await client.query("ROLLBACK;");
+            throw txErr;
+        } finally {
+            client.release();
         }
-
-        // Unassign active project tasks for this member
-        await pool.query(
-            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE project_id = $1 AND assigned_to = $2;",
-            [projectId, memberId]
-        );
 
         // Audit log
         await logActivity({
@@ -2895,6 +2908,19 @@ export const removeAdminTeamMember = async (req, res, next) => {
         });
 
         invalidateAllCaches();
+
+        const io = req.app.get("io");
+        if (io) {
+            io.to(`user:${memberId}`).emit("collabx_tasks_updated", { projectId, memberId, action: "removed" });
+            io.to(`user:${memberId}`).emit("collabx_projects_updated", { projectId, memberId, action: "removed" });
+            io.to(`user:${memberId}`).emit("collabx_team_updated", { projectId, memberId, action: "removed" });
+            io.to(`project_${projectId}_official`).emit("collabx_tasks_updated", { projectId, memberId, action: "unassigned" });
+            io.to(`project_${projectId}_official`).emit("collabx_team_updated", { projectId, memberId });
+            io.in(`user:${memberId}`).socketsLeave([
+                `project_${projectId}_official`,
+                `project_${projectId}_unofficial`,
+            ]);
+        }
 
         return res.status(200).json({
             success: true,

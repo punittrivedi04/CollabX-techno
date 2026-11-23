@@ -322,8 +322,7 @@ export default function Team() {
       await loadProjects();
       window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
-      window.dispatchEvent(new CustomEvent("collabx_team_updated"));
-      window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_tasks_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -439,6 +438,7 @@ export default function Team() {
       setSuccess(response.data.message);
       await loadTeam();
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_tasks_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
@@ -461,6 +461,7 @@ export default function Team() {
       setTeam(null);
       window.dispatchEvent(new CustomEvent("collabx_team_updated"));
       window.dispatchEvent(new CustomEvent("collabx_projects_updated"));
+      window.dispatchEvent(new CustomEvent("collabx_tasks_updated"));
     } catch (err) {
       setError(getError(err));
     } finally {
