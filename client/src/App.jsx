@@ -1,11 +1,11 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import GuestRoute from "./components/GuestRoute";
 import RoleGuard from "./components/RoleGuard";
-import { getHomeRouteForUser } from "./utils/roles";
+import { getEffectiveRole, getHomeRouteForUser } from "./utils/roles";
 
 import DashboardLayout from "./layouts/DashboardLayout";
 
@@ -47,6 +47,7 @@ import MentorAnnouncements from "./pages/mentor/MentorAnnouncements";
 
 // Director Executive Portal Pages
 import DirectorOverview from "./pages/director/DirectorOverview";
+import DirectorStudents from "./pages/director/DirectorStudents";
 import DirectorReports from "./pages/director/DirectorReports";
 import DirectorStudentDetail from "./pages/director/DirectorStudentDetail";
 
@@ -63,6 +64,17 @@ function RoleHomeRedirect() {
     return <Navigate to="/login" replace />;
   }
   return <Navigate to={getHomeRouteForUser(user)} replace />;
+}
+
+function StudentsRouteRedirect() {
+  const { user } = useAuth();
+  const location = useLocation();
+  const role = getEffectiveRole(user);
+  const subPath = location.pathname.replace(/^\/(?:students|student)/, "");
+  if (role === "director") return <Navigate to={`/director/students${subPath}`} replace />;
+  if (role === "mentor") return <Navigate to={`/mentor/students${subPath}`} replace />;
+  if (role === "admin") return <Navigate to={`/admin/students${subPath}`} replace />;
+  return <Navigate to="/dashboard" replace />;
 }
 
 function App() {
@@ -120,7 +132,10 @@ function App() {
               {/* Director Executive Portal (Read-Only, Zero Chat) */}
               <Route element={<RoleGuard allowedRoles={["director"]} />}>
                 <Route path="/director" element={<DirectorOverview />} />
+                <Route path="/director/students" element={<DirectorStudents />} />
+                <Route path="/director/student" element={<DirectorStudents />} />
                 <Route path="/director/students/:id" element={<DirectorStudentDetail />} />
+                <Route path="/director/student/:id" element={<DirectorStudentDetail />} />
                 <Route path="/director/reports" element={<DirectorReports />} />
               </Route>
 
@@ -128,6 +143,12 @@ function App() {
               <Route element={<RoleGuard allowedRoles={["student", "admin", "mentor"]} />}>
                 <Route path="/chat" element={<Chat />} />
               </Route>
+
+              {/* Role-Aware /students and /student shortcuts */}
+              <Route path="/students" element={<StudentsRouteRedirect />} />
+              <Route path="/student" element={<StudentsRouteRedirect />} />
+              <Route path="/students/:id" element={<StudentsRouteRedirect />} />
+              <Route path="/student/:id" element={<StudentsRouteRedirect />} />
 
               {/* Shared Authenticated Utility Pages */}
               <Route path="/leaderboard" element={<Leaderboard />} />

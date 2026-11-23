@@ -140,6 +140,13 @@ export default function DirectorOverview() {
 
         <div className="flex w-full flex-col gap-2.5 sm:w-auto sm:flex-row sm:items-center">
           <Link
+            to="/director/students"
+            className={`${portalSecondaryBtnClass} w-full justify-center rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418] sm:w-auto`}
+          >
+            <GraduationCap size={15} strokeWidth={1.85} />
+            <span>Student Directory</span>
+          </Link>
+          <Link
             to="/director/reports"
             className={`${portalPrimaryBtnClass} w-full justify-center rounded-xl dark:!border-white/15 dark:!bg-white dark:!text-black dark:hover:!bg-neutral-200 sm:w-auto`}
           >
@@ -172,11 +179,22 @@ export default function DirectorOverview() {
           <section className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 xl:grid-cols-6">
             {kpis.map((item) => {
               const Icon = item.icon;
+              const isStudents = item.label === "Total Students";
+              const CardWrapper = isStudents ? Link : "div";
+              const wrapperProps = isStudents
+                ? {
+                    to: "/director/students",
+                    className:
+                      "group rounded-2xl border border-black/12 bg-white p-4 shadow-2xs transition hover:border-black/35 hover:bg-neutral-50 dark:border-white/12 dark:bg-[#08080A] dark:hover:border-white/35 dark:hover:bg-[#101014]",
+                    title: "View all students",
+                  }
+                : {
+                    className:
+                      "rounded-2xl border border-black/12 bg-white p-4 shadow-2xs dark:border-white/12 dark:bg-[#08080A]",
+                  };
+
               return (
-                <div
-                  key={item.label}
-                  className="rounded-2xl border border-black/12 bg-white p-4 shadow-2xs dark:border-white/12 dark:bg-[#08080A]"
-                >
+                <CardWrapper key={item.label} {...wrapperProps}>
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-neutral-50 text-neutral-900 dark:border-white/10 dark:bg-[#101014] dark:text-white">
                     <Icon size={17} strokeWidth={1.85} />
                   </div>
@@ -189,7 +207,7 @@ export default function DirectorOverview() {
                   <p className="mt-0.5 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
                     {item.sub}
                   </p>
-                </div>
+                </CardWrapper>
               );
             })}
           </section>

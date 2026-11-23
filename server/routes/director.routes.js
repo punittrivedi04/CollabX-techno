@@ -7,6 +7,7 @@ import {
     getDirectorProjectById,
     getDirectorMentorById,
     getDirectorStudentById,
+    getDirectorStudents,
 } from "../controllers/director.controller.js";
 
 const router = express.Router();
@@ -16,8 +17,13 @@ router.use(protect, authorize("director"), enforceDirectorReadOnly);
 
 router.get("/overview", getDirectorOverview);
 router.get("/reports", getDirectorReports);
-router.get("/projects/:id", getDirectorProjectById);
-router.get("/mentors/:id", getDirectorMentorById);
+router.get("/students", getDirectorStudents);
+router.get("/student", getDirectorStudents);
 router.get("/students/:id", getDirectorStudentById);
+router.get("/student/:id", getDirectorStudentById);
+router.get("/projects/:id", getDirectorProjectById);
+router.get("/project/:id", getDirectorProjectById);
+router.get("/mentors/:id", getDirectorMentorById);
+router.get("/mentor/:id", getDirectorMentorById);
 
 export default router;

@@ -47,6 +47,9 @@ import {
     getUserProfile,
     updateUserProfile,
 } from "./controllers/user.controller.js";
+import { getDirectorStudents, getDirectorStudentById } from "./controllers/director.controller.js";
+import { getAdminStudents, getAdminStudentById } from "./controllers/admin.controller.js";
+import { getMentorStudents, getMentorStudentById } from "./controllers/mentor.controller.js";
 import protect from "./middleware/auth.middleware.js";
 import { isDirector, blockDirectorMutations } from "./middleware/directorGuard.js";
 import { parsePositiveInt } from "./utils/formatters.js";
@@ -263,6 +266,21 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/mentor", mentorRoutes);
 app.use("/api/director", directorRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
+
+// Direct /api/students and /api/student dispatcher based on role
+app.get(["/api/students", "/api/student"], protect, (req, res, next) => {
+    const role = (req.user?.role || "").toLowerCase().trim();
+    if (role === "director") return getDirectorStudents(req, res, next);
+    if (role === "mentor" || role === "faculty") return getMentorStudents(req, res, next);
+    return getAdminStudents(req, res, next);
+});
+
+app.get(["/api/students/:id", "/api/student/:id"], protect, (req, res, next) => {
+    const role = (req.user?.role || "").toLowerCase().trim();
+    if (role === "director") return getDirectorStudentById(req, res, next);
+    if (role === "mentor" || role === "faculty") return getMentorStudentById(req, res, next);
+    return getAdminStudentById(req, res, next);
+});
 
 // Direct profile endpoints
 app.get("/api/users/profile", protect, getUserProfile);

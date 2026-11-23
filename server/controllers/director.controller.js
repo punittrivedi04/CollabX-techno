@@ -1,5 +1,5 @@
 import pool from "../config/db.js";
-import { parsePositiveInt } from "../utils/formatters.js";
+import { parsePositiveInt, escapeLikePattern } from "../utils/formatters.js";
 import { readCache, aggregateCache } from "../utils/microCache.js";
 
 const parseCohortFromEmail = (email) => {
@@ -36,11 +36,11 @@ const formatActivityRow = (a) => ({
     projectTitle: a.project_title || null,
     user: a.user_id
         ? {
-              id: a.user_id,
-              _id: a.user_id,
-              name: a.user_name || "User",
-              role: a.user_role || "student",
-          }
+            id: a.user_id,
+            _id: a.user_id,
+            name: a.user_name || "User",
+            role: a.user_role || "student",
+        }
         : null,
     action: a.action,
     description: a.description,
@@ -790,19 +790,19 @@ export const getDirectorProjectById = async (req, res, next) => {
 
             const teamLeader = p.owner_id
                 ? {
-                      id: p.owner_id,
-                      name: p.owner_name || "Team Leader",
-                      email: p.owner_email || "",
-                      roll_no: p.owner_roll_no || "",
-                  }
+                    id: p.owner_id,
+                    name: p.owner_name || "Team Leader",
+                    email: p.owner_email || "",
+                    roll_no: p.owner_roll_no || "",
+                }
                 : null;
 
             const mentor = p.mentor_id
                 ? {
-                      id: p.mentor_id,
-                      name: p.mentor_name || "Mentor",
-                      email: p.mentor_email || "",
-                  }
+                    id: p.mentor_id,
+                    name: p.mentor_name || "Mentor",
+                    email: p.mentor_email || "",
+                }
                 : null;
 
             const members = membersRes.rows
@@ -913,11 +913,11 @@ export const getDirectorMentorById = async (req, res, next) => {
                     },
                     teamLeader: p.owner_id
                         ? {
-                              id: p.owner_id,
-                              name: p.owner_name || "Team Leader",
-                              email: p.owner_email || "",
-                              roll_no: p.owner_roll_no || "",
-                          }
+                            id: p.owner_id,
+                            name: p.owner_name || "Team Leader",
+                            email: p.owner_email || "",
+                            roll_no: p.owner_roll_no || "",
+                        }
                         : null,
                     memberCount: Number(p.member_count || 0),
                 };
@@ -971,8 +971,8 @@ export const getDirectorStudentById = async (req, res, next) => {
         const cacheKey = `director:student:u:${req.user.id}:sid:${studentId}`;
         const detail = await readCache.getOrSet(cacheKey, async () => {
             const studentRes = await pool.query(
-                `SELECT u.id, u.name, u.email, u.role, u.department, u.phone, u.roll_no,
-                        u.avatar, u.is_active, u.created_at, u.mentor_id,
+                `SELECT u.id, u.name, u.email, u.role, u.phone, u.roll_no,
+                        u.is_active, u.created_at, u.mentor_id,
                         m.name AS mentor_name, m.email AS mentor_email, m.phone AS mentor_phone
                  FROM users u
                  LEFT JOIN users m ON m.id = u.mentor_id
@@ -1120,11 +1120,12 @@ export const getDirectorStudentById = async (req, res, next) => {
                     name: student.name,
                     email: student.email,
                     role: student.role || "student",
-                    department: student.department || "",
+                    department: parseCohortFromEmail(student.email).department,
+                    cohort: parseCohortFromEmail(student.email),
                     phone: student.phone || "",
                     roll_no: student.roll_no || "",
                     rollNumber: student.roll_no || "",
-                    avatar: student.avatar || null,
+                    avatar: null,
                     isActive: Boolean(student.is_active),
                     is_active: Boolean(student.is_active),
                     createdAt: student.created_at,
@@ -1169,6 +1170,184 @@ export const getDirectorStudentById = async (req, res, next) => {
             student: detail.student,
             data: detail,
             ...detail,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// ==========================================
+// 6. GET /api/director/students (Directory with Projects, Tasks, and Search)
+// ==========================================
+export const getDirectorStudents = async (req, res, next) => {
+    try {
+        const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
+        const statusFilter = String(req.query.status || "all").toLowerCase().trim();
+        const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
+        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+        const offset = (page - 1) * limit;
+
+        const cacheKey = `director:students:u:${req.user.id}:q:${search}:s:${statusFilter}:p:${page}:l:${limit}`;
+        const result = await readCache.getOrSet(cacheKey, async () => {
+            const conditions = ["LOWER(COALESCE(u.role, 'student')) = 'student'"];
+            const params = [];
+
+            if (search) {
+                params.push(`%${escapeLikePattern(search)}%`);
+                const idx = params.length;
+                conditions.push(`(u.name ILIKE $${idx} ESCAPE '\\' OR u.email ILIKE $${idx} ESCAPE '\\' OR COALESCE(u.roll_no, '') ILIKE $${idx} ESCAPE '\\')`);
+            }
+
+            if (statusFilter === "active") {
+                conditions.push("u.is_active = TRUE");
+            } else if (statusFilter === "inactive") {
+                conditions.push("u.is_active = FALSE");
+            }
+
+            const whereClause = conditions.join(" AND ");
+
+            const countRes = await pool.query(
+                `SELECT COUNT(*)::int AS total FROM users u WHERE ${whereClause}`,
+                params
+            );
+            const total = Number(countRes.rows[0]?.total || 0);
+
+            const listParams = [...params, limit, offset];
+            const { rows: students } = await pool.query(
+                `SELECT u.id, u.name, u.email, u.roll_no, u.role, u.phone, u.mentor_id,
+                        u.is_verified, u.is_active, u.created_at,
+                        m.name AS mentor_name, m.email AS mentor_email
+                 FROM users u
+                 LEFT JOIN users m ON m.id = u.mentor_id
+                 WHERE ${whereClause}
+                 ORDER BY u.created_at DESC, u.id DESC
+                 LIMIT $${params.length + 1} OFFSET $${params.length + 2};`,
+                listParams
+            );
+
+            if (students.length === 0) {
+                return { students: [], total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
+            }
+
+            const studentIds = students.map((s) => s.id);
+            const [projectsRes, tasksRes] = await Promise.all([
+                pool.query(
+                    `SELECT DISTINCT p.id, p.title, p.status, p.progress, p.deadline, p.owner_id, p.mentor_id,
+                            m.name AS mentor_name, m.email AS mentor_email,
+                            (p.owner_id = s.sid OR EXISTS (
+                                SELECT 1 FROM project_members pm_leader
+                                WHERE pm_leader.project_id = p.id AND pm_leader.user_id = s.sid AND LOWER(TRIM(pm_leader.role)) = 'leader'
+                            )) AS is_leader,
+                            s.sid AS student_id,
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id) AS total_tasks,
+                            (SELECT COUNT(*)::int FROM tasks t WHERE t.project_id = p.id AND LOWER(TRIM(COALESCE(t.status, ''))) IN ('completed', 'done')) AS completed_tasks
+                     FROM (
+                         SELECT owner_id AS sid, id AS pid FROM projects
+                         WHERE owner_id = ANY($1) AND (status IS NULL OR LOWER(TRIM(status)) != 'archived')
+                         UNION
+                         SELECT pm.user_id AS sid, pm.project_id AS pid FROM project_members pm
+                         JOIN projects p2 ON p2.id = pm.project_id
+                         WHERE pm.user_id = ANY($1) AND (p2.status IS NULL OR LOWER(TRIM(p2.status)) != 'archived')
+                     ) s
+                     JOIN projects p ON p.id = s.pid
+                     LEFT JOIN users m ON m.id = p.mentor_id
+                     WHERE (p.status IS NULL OR LOWER(TRIM(p.status)) != 'archived')
+                     ORDER BY p.id ASC;`,
+                    [studentIds]
+                ),
+                pool.query(
+                    `SELECT t.assigned_to AS student_id,
+                            COUNT(*)::int AS total_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(t.status)) IN ('completed', 'done'))::int AS completed_tasks,
+                            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(t.status, ''))) NOT IN ('completed', 'done'))::int AS pending_tasks
+                     FROM tasks t
+                     LEFT JOIN projects p ON p.id = t.project_id
+                     WHERE t.assigned_to = ANY($1) AND (p.status != 'Archived' OR p.status IS NULL)
+                     GROUP BY t.assigned_to;`,
+                    [studentIds]
+                ),
+            ]);
+
+            const projectsByStudent = new Map();
+            for (const row of projectsRes.rows) {
+                if (!projectsByStudent.has(row.student_id)) {
+                    projectsByStudent.set(row.student_id, []);
+                }
+                projectsByStudent.get(row.student_id).push({
+                    id: row.id,
+                    _id: row.id,
+                    title: row.title,
+                    status: row.status,
+                    progress: Number(row.progress || 0),
+                    deadline: row.deadline,
+                    isLeader: Boolean(row.is_leader),
+                    mentorName: row.mentor_name,
+                    mentorEmail: row.mentor_email,
+                });
+            }
+
+            const tasksByStudent = new Map();
+            for (const row of tasksRes.rows) {
+                tasksByStudent.set(row.student_id, {
+                    totalTasks: Number(row.total_tasks || 0),
+                    completedTasks: Number(row.completed_tasks || 0),
+                    pendingTasks: Number(row.pending_tasks || 0),
+                });
+            }
+
+            const formatted = students.map((s) => {
+                const sProjects = projectsByStudent.get(s.id) || [];
+                const sTasks = tasksByStudent.get(s.id) || { totalTasks: 0, completedTasks: 0, pendingTasks: 0 };
+                const isLeader = sProjects.some((p) => p.isLeader);
+
+                return {
+                    id: s.id,
+                    _id: s.id,
+                    name: s.name,
+                    email: s.email,
+                    roll_no: s.roll_no || "",
+                    rollNumber: s.roll_no || "",
+                    role: s.role || "student",
+                    department: parseCohortFromEmail(s.email).department,
+                    cohort: parseCohortFromEmail(s.email),
+                    phone: s.phone || "",
+                    isActive: Boolean(s.is_active),
+                    is_active: Boolean(s.is_active),
+                    createdAt: s.created_at,
+                    mentor: s.mentor_id
+                        ? { id: s.mentor_id, name: s.mentor_name, email: s.mentor_email }
+                        : null,
+                    projectCount: sProjects.length,
+                    teamCount: sProjects.length,
+                    projects: sProjects,
+                    teams: sProjects,
+                    isLeader,
+                    totalTasks: sTasks.totalTasks,
+                    completedTasks: sTasks.completedTasks,
+                    pendingTasks: sTasks.pendingTasks,
+                    taskCompletionRate: sTasks.totalTasks > 0 ? Math.round((sTasks.completedTasks / sTasks.totalTasks) * 100) : 0,
+                };
+            });
+
+            return {
+                students: formatted,
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit) || 1,
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            readOnly: true,
+            students: result.students,
+            pagination: {
+                total: result.total,
+                page: result.page,
+                limit: result.limit,
+                totalPages: result.totalPages,
+            },
         });
     } catch (error) {
         next(error);

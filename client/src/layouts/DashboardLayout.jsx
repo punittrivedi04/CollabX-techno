@@ -78,6 +78,7 @@ const mentorRailLinks = [
 
 const directorRailLinks = [
   { name: "Executive Overview", path: "/director", icon: LayoutDashboard, end: true },
+  { name: "Students", path: "/director/students", icon: GraduationCap },
   { name: "Leaderboard", path: "/leaderboard", icon: Trophy },
   { name: "Institute Reports", path: "/director/reports", icon: BarChart3 },
   { name: "Profile & Settings", path: "/profile", icon: Settings },
@@ -107,6 +108,7 @@ function resolvePageTitle(pathname) {
     "/mentor/tasks": "TASKS",
     "/mentor/announcements": "TEAM ANNOUNCEMENTS",
     "/director": "EXECUTIVE OVERVIEW",
+    "/director/students": "STUDENT DIRECTORY",
     "/director/reports": "INSTITUTE REPORTS",
   };
   if (exactTitles[pathname]) return exactTitles[pathname];
@@ -177,9 +179,8 @@ export default function DashboardLayout() {
   const userInitials = getInitials(userName);
   const formattedRole = getRoleDisplayLabel(user);
   const userRoll = user?.roll_no || user?.rollNumber;
-  const userRoleLabel = `${
-    user?.department ? `${user.department} · ${formattedRole}` : formattedRole
-  }${userRoll ? ` · ${userRoll}` : ""}`;
+  const userRoleLabel = `${user?.department ? `${user.department} · ${formattedRole}` : formattedRole
+    }${userRoll ? ` · ${userRoll}` : ""}`;
 
   const fetchUnreadCount = async () => {
     try {
@@ -273,8 +274,8 @@ export default function DashboardLayout() {
     } catch (err) {
       setCreateError(
         err?.response?.data?.message ||
-          err?.message ||
-          "Failed to create project. Please try again.",
+        err?.message ||
+        "Failed to create project. Please try again.",
       );
     } finally {
       setCreatingProject(false);
@@ -328,10 +329,10 @@ export default function DashboardLayout() {
   }, [location.pathname]);
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-[#EBF1EC] text-[#0F172A] transition-colors duration-200">
+    <div className="relative min-h-screen bg-[#EBF1EC] text-[#0F172A] transition-colors duration-200">
       {/* Sage-Lime Architectural Grid & Soft Ambient Glow */}
       <div
-        className="pointer-events-none fixed inset-0 z-0"
+        className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
         style={{
           backgroundImage:
             "linear-gradient(to right, rgba(20, 26, 24, 0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(20, 26, 24, 0.04) 1px, transparent 1px)",
@@ -386,10 +387,9 @@ export default function DashboardLayout() {
                       end={Boolean(item.end)}
                       onClick={() => setMobileOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-3 rounded-full px-4 py-2 text-xs font-bold transition ${
-                          isActive
-                            ? "bg-[#1E2422] text-[#BEF264]"
-                            : "text-[#42504B] hover:bg-[#EFF4F0]"
+                        `flex items-center gap-3 rounded-full px-4 py-2 text-xs font-bold transition ${isActive
+                          ? "bg-[#1E2422] text-[#BEF264]"
+                          : "text-[#42504B] hover:bg-[#EFF4F0]"
                         }`
                       }
                     >
@@ -513,9 +513,8 @@ export default function DashboardLayout() {
       {/* 2. CURVED LEFT DOCK (Icons Up Top, Actions Pinned Bottom, No Scrollbar) */}
       <aside className="fixed left-4 top-20 z-30 hidden shrink-0 flex-col items-center lg:flex">
         <div
-          className={`flex h-[calc(100vh-6.25rem)] flex-col items-center justify-between overflow-visible rounded-[34px] border border-[#D4DFD7] bg-[#FFFFFF]/95 py-2.5 shadow-md shadow-[#141A18]/10 transition-all duration-200 ${
-            dockExpanded ? "w-52 items-stretch px-2.5" : "w-12 px-1.5"
-          }`}
+          className={`flex h-[calc(100vh-6.25rem)] flex-col items-center justify-between overflow-visible rounded-[34px] border border-[#D4DFD7] bg-[#FFFFFF]/95 py-2.5 shadow-md shadow-[#141A18]/10 transition-all duration-200 ${dockExpanded ? "w-52 items-stretch px-2.5" : "w-12 px-1.5"
+            }`}
         >
           {/* Top Group: Dock Toggle + Nav Links Placed Up High */}
           <div className="flex flex-col items-center">
@@ -524,9 +523,8 @@ export default function DashboardLayout() {
               onClick={() => setDockExpanded((prev) => !prev)}
               aria-label={dockExpanded ? "Collapse dock" : "Expand dock"}
               title={dockExpanded ? "Collapse dock" : "Expand dock"}
-              className={`flex h-9 cursor-pointer items-center justify-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-[#141A18] transition hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white ${
-                dockExpanded ? "w-full justify-between px-3" : "w-9"
-              }`}
+              className={`flex h-9 cursor-pointer items-center justify-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-[#141A18] transition hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white ${dockExpanded ? "w-full justify-between px-3" : "w-9"
+                }`}
             >
               <ChevronsLeftRight size={15} strokeWidth={1.85} />
               {dockExpanded && (
@@ -548,14 +546,12 @@ export default function DashboardLayout() {
                       to={item.path}
                       end={Boolean(item.end)}
                       className={({ isActive }) =>
-                        `flex items-center rounded-full text-xs font-bold transition-all duration-150 ${
-                          dockExpanded
-                            ? "w-full justify-start gap-3 px-3 py-2"
-                            : "h-9 w-9 justify-center"
-                        } ${
-                          isActive
-                            ? "bg-[#141A17] text-[#BEF264] shadow-sm"
-                            : "text-[#5C6B66] hover:bg-[#1E6B4B] hover:text-white"
+                        `flex items-center rounded-full text-xs font-bold transition-all duration-150 ${dockExpanded
+                          ? "w-full justify-start gap-3 px-3 py-2"
+                          : "h-9 w-9 justify-center"
+                        } ${isActive
+                          ? "bg-[#141A17] text-[#BEF264] shadow-sm"
+                          : "text-[#5C6B66] hover:bg-[#1E6B4B] hover:text-white"
                         }`
                       }
                     >
@@ -584,11 +580,10 @@ export default function DashboardLayout() {
                 onClick={() => setShowCreateModal(true)}
                 aria-label="New Project"
                 title="New Project"
-                className={`flex cursor-pointer items-center rounded-full bg-[#141A17] text-xs font-extrabold text-[#BEF264] transition hover:bg-[#1E6B4B] hover:text-white ${
-                  dockExpanded
+                className={`flex cursor-pointer items-center rounded-full bg-[#141A17] text-xs font-extrabold text-[#BEF264] transition hover:bg-[#1E6B4B] hover:text-white ${dockExpanded
                     ? "w-full justify-center gap-2 px-3 py-2"
                     : "h-9 w-9 justify-center"
-                }`}
+                  }`}
               >
                 <Plus size={16} strokeWidth={2} />
                 {dockExpanded && <span>New Project</span>}
@@ -600,11 +595,10 @@ export default function DashboardLayout() {
               onClick={handleLogout}
               aria-label="Sign Out"
               title="Sign Out"
-              className={`flex cursor-pointer items-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-xs font-bold text-[#5C6B66] transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 ${
-                dockExpanded
+              className={`flex cursor-pointer items-center rounded-full border border-[#D4DFD7] bg-[#EFF4F0] text-xs font-bold text-[#5C6B66] transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 ${dockExpanded
                   ? "w-full justify-center gap-2 px-3 py-2"
                   : "h-9 w-9 justify-center"
-              }`}
+                }`}
             >
               <LogOut size={15} strokeWidth={1.85} />
               {dockExpanded && <span>Sign Out</span>}
@@ -615,9 +609,8 @@ export default function DashboardLayout() {
 
       {/* 3. MAIN CONTENT AREA */}
       <div
-        className={`relative min-h-screen w-full px-3 pb-8 pt-20 transition-all duration-200 sm:px-6 lg:pr-8 ${
-          dockExpanded ? "lg:pl-60" : "lg:pl-24"
-        }`}
+        className={`relative min-h-screen w-full px-3 pb-8 pt-20 transition-all duration-200 sm:px-6 lg:pr-8 ${dockExpanded ? "lg:pl-60" : "lg:pl-24"
+          }`}
       >
         <main className="min-w-0 w-full">
           <PortalErrorBoundary key={location.pathname}>

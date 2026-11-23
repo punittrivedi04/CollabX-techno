@@ -28,6 +28,7 @@ import {
   SectionCard,
   portalSecondaryBtnClass,
 } from "../../components/portal/PortalUI";
+import DirectorInspectDrawer from "./DirectorInspectDrawer";
 
 function NeutralPill({ label, className = "" }) {
   return (
@@ -45,6 +46,7 @@ export default function DirectorStudentDetail() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [inspectProjectId, setInspectProjectId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,11 +75,11 @@ export default function DirectorStudentDetail() {
       <div className="space-y-4 text-neutral-950 dark:text-white">
         <ErrorAlert message={error || "Student not found."} />
         <Link
-          to="/director"
+          to="/director/students"
           className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
         >
           <ArrowLeft size={15} strokeWidth={1.85} />
-          <span>Back to Executive Overview</span>
+          <span>Back to Students Directory</span>
         </Link>
       </div>
     );
@@ -133,11 +135,11 @@ export default function DirectorStudentDetail() {
       {/* Top Navigation Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link
-          to="/director"
+          to="/director/students"
           className={`${portalSecondaryBtnClass} rounded-xl border-black/15 bg-white text-neutral-900 hover:border-black/35 hover:bg-neutral-50 dark:!border-white/15 dark:!bg-[#08080A] dark:!text-white dark:hover:!bg-[#141418]`}
         >
           <ArrowLeft size={15} strokeWidth={1.85} />
-          <span>Back to Executive Overview</span>
+          <span>Back to Students Directory</span>
         </Link>
 
         <div className="flex items-center gap-2">
@@ -260,7 +262,8 @@ export default function DirectorStudentDetail() {
               {teams.map((t) => (
                 <div
                   key={t.id}
-                  className="block rounded-xl border border-black/10 bg-neutral-50 p-4 transition hover:border-black/35 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35"
+                  onClick={() => setInspectProjectId(t.id)}
+                  className="block cursor-pointer rounded-xl border border-black/10 bg-neutral-50 p-4 transition hover:border-black/35 hover:bg-neutral-100/70 dark:border-white/10 dark:bg-[#101014] dark:hover:border-white/35 dark:hover:bg-[#16161c]"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-extrabold text-neutral-950 dark:text-white">
@@ -274,6 +277,9 @@ export default function DirectorStudentDetail() {
                         </span>
                       )}
                       <NeutralPill label={resolveProjectStatus(t)} />
+                      <span className="text-[10px] font-bold text-neutral-600 underline dark:text-neutral-400">
+                        View Project &rarr;
+                      </span>
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
@@ -359,6 +365,12 @@ export default function DirectorStudentDetail() {
           </div>
         )}
       </SectionCard>
+
+      {/* Executive Project Inspect Drawer */}
+      <DirectorInspectDrawer
+        projectId={inspectProjectId}
+        onClose={() => setInspectProjectId(null)}
+      />
     </div>
   );
 }

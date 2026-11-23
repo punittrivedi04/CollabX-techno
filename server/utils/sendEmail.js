@@ -41,6 +41,12 @@ const getSmtpTransporter = () => {
             user,
             pass,
         },
+        tls: {
+            rejectUnauthorized: false,
+        },
+        connectionTimeout: 15000,
+        greetingTimeout: 10000,
+        socketTimeout: 20000,
     });
     lastSmtpConfig = currentConfigKey;
     return cachedTransporter;

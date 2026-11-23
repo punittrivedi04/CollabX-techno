@@ -108,7 +108,7 @@ export default function Register() {
       setStep("otp");
       setSuccessMessage(
         res.message ||
-          "A 6-digit verification code has been sent to your email.",
+        "A 6-digit verification code has been sent to your email.",
       );
       setTimeout(() => inputRefs.current[0]?.focus(), 150);
     } catch (err) {
@@ -224,28 +224,30 @@ export default function Register() {
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#EBF1EC] px-3.5 py-6 text-[#141A18] sm:px-6 sm:py-10">
-      {/* Subtle Sage-Lime Architectural Grid & Soft Ambient Glow */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "linear-gradient(to right, rgba(20, 26, 24, 0.045) 1px, transparent 1px), linear-gradient(to bottom, rgba(20, 26, 24, 0.045) 1px, transparent 1px)",
-          backgroundSize: "36px 36px",
-          maskImage:
-            "radial-gradient(ellipse 85% 80% at 50% 50%, #000 50%, transparent 100%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse 85% 80% at 50% 50%, #000 50%, transparent 100%)",
-        }}
-      />
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[460px]"
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(188, 231, 132, 0.36) 0%, rgba(93, 211, 158, 0.14) 50%, rgba(235, 241, 236, 0) 100%)",
-        }}
-      />
-      <div className="pointer-events-none absolute -bottom-36 left-1/2 h-[340px] w-[720px] -translate-x-1/2 rounded-full bg-[#5dd39e]/20 blur-3xl" />
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-[#EBF1EC] px-3.5 py-6 text-[#141A18] sm:px-6 sm:py-10">
+      {/* Subtle Sage-Lime Architectural Grid & Soft Ambient Glow wrapped with overflow-hidden */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, rgba(20, 26, 24, 0.045) 1px, transparent 1px), linear-gradient(to bottom, rgba(20, 26, 24, 0.045) 1px, transparent 1px)",
+            backgroundSize: "36px 36px",
+            maskImage:
+              "radial-gradient(ellipse 85% 80% at 50% 50%, #000 50%, transparent 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 85% 80% at 50% 50%, #000 50%, transparent 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-x-0 top-0 h-[460px]"
+          style={{
+            background:
+              "linear-gradient(180deg, rgba(188, 231, 132, 0.36) 0%, rgba(93, 211, 158, 0.14) 50%, rgba(235, 241, 236, 0) 100%)",
+          }}
+        />
+        <div className="absolute -bottom-36 left-1/2 h-[340px] w-[720px] -translate-x-1/2 rounded-full bg-[#5dd39e]/20 blur-3xl" />
+      </div>
 
       {/* Centered Proportional Bento Container */}
       <div className="relative z-10 w-full max-w-[540px]">
