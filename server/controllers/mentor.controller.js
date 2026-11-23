@@ -1589,7 +1589,7 @@ export const createMentorAnnouncement = async (req, res, next) => {
                 );
                 const emails = emailsRes.rows.map((r) => r.email).filter(Boolean);
                 if (emails.length > 0) {
-                    await sendAnnouncementEmail({
+                    const mailRes = await sendAnnouncementEmail({
                         to: emails,
                         title: created.title,
                         content: created.content,
@@ -1597,6 +1597,9 @@ export const createMentorAnnouncement = async (req, res, next) => {
                         authorRole: "Faculty Mentor",
                         projectTitle: project.title,
                     });
+                    if (!mailRes?.sent) {
+                        console.warn("[Mentor Announcement Email Notice]", mailRes?.reason);
+                    }
                 }
             } catch (mailErr) {
                 console.warn("[Mentor Announcement Email Notice]", mailErr.message);

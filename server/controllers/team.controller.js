@@ -386,6 +386,10 @@ export const sendInvitation = async (req, res, next) => {
                     projectName: project.title,
                     invitationUrl,
                     role: "mentor",
+                }).then((mailRes) => {
+                    if (!mailRes?.sent) {
+                        console.warn("[Mentor Invite Email Failure]", mailRes?.reason);
+                    }
                 }).catch((mailErr) => {
                     console.warn("[Mentor Invite Email Notice]", mailErr.message);
                 });
@@ -512,6 +516,10 @@ export const sendInvitation = async (req, res, next) => {
                 projectName: project.title,
                 invitationUrl,
                 role: "member",
+            }).then((mailRes) => {
+                if (!mailRes?.sent) {
+                    console.warn("[Squad Member Invite Email Failure]", mailRes?.reason);
+                }
             }).catch((mailErr) => {
                 console.warn("[Squad Member Invite Email Notice]", mailErr.message);
             });

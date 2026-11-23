@@ -391,7 +391,11 @@ export const registerUser = async (req, res, next) => {
 
         // Non-blocking welcome email delivery for institutional accounts
         if (isTechnoNjr) {
-            sendWelcomeEmail({ to: cleanEmail, name: cleanName, role: "student" }).catch((emailErr) => {
+            sendWelcomeEmail({ to: cleanEmail, name: cleanName, role: "student" }).then((mailRes) => {
+                if (!mailRes?.sent) {
+                    console.warn("[Welcome Email Failure]", mailRes?.reason);
+                }
+            }).catch((emailErr) => {
                 console.warn("[Welcome Email Notice] Non-blocking delivery:", emailErr.message);
             });
         }

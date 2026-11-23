@@ -1,11 +1,15 @@
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-
-const FALLBACK_RESEND_KEY = "re_8H75sYHY_FFbGZcRXxYSED8DtEe8hBL74";
-const FALLBACK_RESEND_FROM = "CollabX <onboarding@resend.dev>";
 
 let cachedTransporter = null;
 let lastSmtpConfig = null;
@@ -18,21 +22,39 @@ const getClientUrl = () => {
     return first.replace(/\/+$/, "");
 };
 
-const getFromAddress = (isResend = true) => {
-    if (isResend) {
-        return (
-            process.env.RESEND_FROM ||
-            FALLBACK_RESEND_FROM
-        );
+/**
+ * Robustly parses a sender string (e.g. "CollabX <noreply@technonjr.org>" or "noreply@technonjr.org")
+ * into a structured { name, email } object for APIs like Brevo.
+ */
+export const parseSender = (rawStr, defaultName = "CollabX", defaultEmail = "noreply@technonjr.org") => {
+    if (!rawStr || typeof rawStr !== "string") {
+        return { name: defaultName, email: defaultEmail };
     }
-    return (
-        process.env.EMAIL_FROM ||
-        process.env.MAIL_FROM ||
-        FALLBACK_RESEND_FROM
-    );
+    const trimmed = rawStr.trim();
+    const match = trimmed.match(/^(?:["']?([^<"']+)["']?\s*)?<([^>]+)>$/);
+    if (match) {
+        return {
+            name: (match[1] || defaultName).trim(),
+            email: match[2].trim().toLowerCase(),
+        };
+    }
+    if (trimmed.includes("@")) {
+        return {
+            name: defaultName,
+            email: trimmed.toLowerCase(),
+        };
+    }
+    return { name: defaultName, email: defaultEmail };
 };
 
-const withTimeout = (promise, ms = 7000, errorMsg = "Email request timed out") => {
+export const formatSenderString = ({ name, email }) => {
+    return name ? `${name} <${email}>` : email;
+};
+
+/**
+ * Strict timeout guard to ensure outbound email calls never hang the server.
+ */
+export const withTimeout = (promise, ms = 7000, errorMsg = "Email request timed out") => {
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error(errorMsg)), ms);
@@ -43,11 +65,200 @@ const withTimeout = (promise, ms = 7000, errorMsg = "Email request timed out") =
     ]);
 };
 
+/**
+ * Normalizes email recipients (string, comma-separated, array of strings or objects)
+ * into a clean array of email strings.
+ */
+const normalizeRecipients = (recipients) => {
+    if (!recipients) return [];
+    if (Array.isArray(recipients)) {
+        return recipients
+            .map((r) => {
+                if (typeof r === "string") return r.trim();
+                if (r && typeof r === "object" && r.email) return String(r.email).trim();
+                return null;
+            })
+            .filter(Boolean);
+    }
+    if (typeof recipients === "string") {
+        return recipients
+            .split(",")
+            .map((e) => e.trim())
+            .filter(Boolean);
+    }
+    return [];
+};
+
+/**
+ * Brevo (Sendinblue) Transactional REST API Driver
+ * POST https://api.brevo.com/v3/smtp/email
+ */
+const sendViaBrevo = async ({ apiKey, to, subject, html, text, bcc }) => {
+    const rawSender = process.env.BREVO_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM;
+    const sender = parseSender(rawSender, "CollabX", "noreply@technonjr.org");
+
+    const toEmails = normalizeRecipients(to);
+    const bccEmails = normalizeRecipients(bcc);
+
+    if (toEmails.length === 0 && bccEmails.length === 0) {
+        return { sent: false, reason: "No recipient email addresses provided" };
+    }
+
+    // Brevo requires at least one address in 'to'.
+    // For BCC-only dispatches (e.g. campus announcements), populate 'to' with the sender's address.
+    const formattedTo = toEmails.length > 0
+        ? toEmails.map((email) => ({ email }))
+        : [{ email: sender.email, name: sender.name }];
+
+    const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
+
+    const payload = {
+        sender: { name: sender.name, email: sender.email },
+        to: formattedTo,
+        subject,
+        htmlContent: html,
+        textContent: plainText,
+    };
+
+    if (bccEmails.length > 0) {
+        payload.bcc = bccEmails.map((email) => ({ email }));
+    }
+
+    const response = await withTimeout(
+        fetch("https://api.brevo.com/v3/smtp/email", {
+            method: "POST",
+            headers: {
+                "api-key": apiKey,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            body: JSON.stringify(payload),
+        }),
+        7000,
+        "Brevo API request timed out after 7000ms"
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (response.ok) {
+        return {
+            sent: true,
+            transport: "brevo",
+            messageId: data?.messageId || "brevo-ok",
+        };
+    }
+
+    const reason = data?.message || data?.error || `Brevo HTTP error ${response.status}: ${response.statusText}`;
+    console.warn("[CollabX Brevo Error]", reason);
+    return { sent: false, reason };
+};
+
+/**
+ * Resend Transactional REST API Driver
+ */
+const getResendClient = (apiKey) => {
+    if (!apiKey) return null;
+    if (cachedResend && lastResendKey === apiKey) {
+        return cachedResend;
+    }
+    try {
+        cachedResend = new Resend(apiKey);
+        lastResendKey = apiKey;
+        return cachedResend;
+    } catch (e) {
+        console.warn("[getResendClient error]", e.message);
+        return null;
+    }
+};
+
+const sendViaResend = async ({ apiKey, to, subject, html, text, bcc }) => {
+    const resendClient = getResendClient(apiKey);
+    if (!resendClient) {
+        return { sent: false, reason: "Failed to initialize Resend client" };
+    }
+
+    const rawSender = process.env.RESEND_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM;
+    const defaultSender = "CollabX <onboarding@resend.dev>";
+    let sendFrom = rawSender?.trim() || defaultSender;
+
+    const toEmails = normalizeRecipients(to);
+    const bccEmails = normalizeRecipients(bcc);
+
+    if (toEmails.length === 0 && bccEmails.length === 0) {
+        return { sent: false, reason: "No recipient email addresses provided" };
+    }
+
+    const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
+    const toList = toEmails.length > 0 ? toEmails : [sendFrom];
+    const bccList = bccEmails.length > 0 ? bccEmails : undefined;
+
+    let resendResponse;
+    try {
+        resendResponse = await withTimeout(
+            resendClient.emails.send({
+                from: sendFrom,
+                to: toList,
+                bcc: bccList,
+                subject,
+                html,
+                text: plainText,
+            }),
+            7000,
+            "Resend API request timed out after 7000ms"
+        );
+    } catch (timeoutOrErr) {
+        console.warn("[CollabX Resend Exception]", timeoutOrErr.message);
+        resendResponse = { error: timeoutOrErr };
+    }
+
+    // Auto-heal: If custom domain unverified and wasn't already default sandbox sender, retry once
+    if (
+        resendResponse?.error &&
+        sendFrom !== defaultSender &&
+        (resendResponse.error.message?.includes("domain is not verified") ||
+         resendResponse.error.message?.includes("validation_error") ||
+         resendResponse.error.message?.includes("not verified"))
+    ) {
+        console.warn(`[CollabX Resend] Domain "${sendFrom}" unverified. Retrying with sandbox sender "${defaultSender}"...`);
+        try {
+            resendResponse = await withTimeout(
+                resendClient.emails.send({
+                    from: defaultSender,
+                    to: toEmails.length > 0 ? toEmails : [defaultSender],
+                    bcc: bccList,
+                    subject,
+                    html,
+                    text: plainText,
+                }),
+                7000,
+                "Resend API retry timed out after 7000ms"
+            );
+        } catch (retryErr) {
+            resendResponse = { error: retryErr };
+        }
+    }
+
+    if (!resendResponse?.error && resendResponse?.data) {
+        return {
+            sent: true,
+            transport: "resend",
+            emailId: resendResponse.data.id,
+        };
+    }
+
+    const reason = resendResponse?.error?.message || "Resend email delivery failed";
+    console.warn("[CollabX Resend Failure]", reason);
+    return { sent: false, reason };
+};
+
+/**
+ * Nodemailer SMTP Driver with short timeouts for cloud host compatibility
+ */
 const getSmtpTransporter = () => {
-    const host = process.env.SMTP_HOST;
+    const host = process.env.SMTP_HOST?.trim();
     const port = Number(process.env.SMTP_PORT) || 587;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
+    const user = process.env.SMTP_USER?.trim();
+    const pass = process.env.SMTP_PASS?.trim();
     const secure = process.env.SMTP_SECURE === "true" || port === 465;
 
     const currentConfigKey = `${host}:${port}:${user}:${secure}`;
@@ -63,32 +274,46 @@ const getSmtpTransporter = () => {
             user,
             pass,
         },
-        connectionTimeout: 4000, // 4s max connect timeout (prevents hanging indefinitely on firewalled hosts like Render)
-        greetingTimeout: 4000,   // 4s max greeting timeout
-        socketTimeout: 5000,     // 5s max socket inactivity timeout
+        connectionTimeout: 5000, // 5s max connect timeout
+        greetingTimeout: 5000,   // 5s max greeting timeout
+        socketTimeout: 7000,     // 7s max socket inactivity timeout
     });
     lastSmtpConfig = currentConfigKey;
     return cachedTransporter;
 };
 
-const getResendClient = () => {
-    const apiKey = (
-        process.env.RESEND_API_KEY ||
-        process.env.EMAIL_API_KEY ||
-        FALLBACK_RESEND_KEY
-    )?.trim();
-    if (!apiKey) return null;
-    if (cachedResend && lastResendKey === apiKey) {
-        return cachedResend;
+const sendViaSmtp = async ({ to, subject, html, text, bcc }) => {
+    const transporter = getSmtpTransporter();
+    const from = (process.env.EMAIL_FROM || process.env.MAIL_FROM || "CollabX <noreply@technonjr.org>").trim();
+    const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
+
+    const toEmails = normalizeRecipients(to);
+    const bccEmails = normalizeRecipients(bcc);
+
+    if (toEmails.length === 0 && bccEmails.length === 0) {
+        return { sent: false, reason: "No recipient email addresses provided" };
     }
-    try {
-        cachedResend = new Resend(apiKey);
-        lastResendKey = apiKey;
-        return cachedResend;
-    } catch (e) {
-        console.warn("[getResendClient error]", e.message);
-        return null;
-    }
+
+    const mailOptions = {
+        from,
+        to: toEmails.length > 0 ? toEmails.join(", ") : from,
+        bcc: bccEmails.length > 0 ? bccEmails.join(", ") : undefined,
+        subject,
+        html,
+        text: plainText,
+    };
+
+    const info = await withTimeout(
+        transporter.sendMail(mailOptions),
+        7000,
+        "SMTP dispatch timed out after 7000ms"
+    );
+
+    return {
+        sent: true,
+        transport: "smtp",
+        messageId: info?.messageId,
+    };
 };
 
 const renderEmailShell = ({
@@ -151,106 +376,40 @@ const renderEmailShell = ({
  */
 export const sendEmail = async ({ to, subject, html, text, bcc }) => {
     try {
-        const resendClient = getResendClient();
-        const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+        const brevoKey = (process.env.BREVO_API_KEY || process.env.BREVO_KEY || process.env.SENDINBLUE_API_KEY)?.trim();
+        const resendKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY)?.trim();
+        const hasSmtp = Boolean(
+            process.env.SMTP_HOST?.trim() &&
+            process.env.SMTP_USER?.trim() &&
+            process.env.SMTP_PASS?.trim()
+        );
 
-        if (!resendClient && !hasSmtp) {
-            if (process.env.NODE_ENV !== "production") {
-                const recipients = Array.isArray(to) ? to.join(", ") : to || (Array.isArray(bcc) ? bcc.join(", ") : bcc);
-                console.log(`[CollabX Dev Mailer] (No Resend/SMTP configured) Recipient: ${recipients} | Subject: "${subject}"`);
-            }
-            return { sent: false, reason: "No email transport configured in environment" };
+        // 1. Primary: Brevo REST API (POST https://api.brevo.com/v3/smtp/email)
+        if (brevoKey) {
+            return await sendViaBrevo({ apiKey: brevoKey, to, subject, html, text, bcc });
         }
 
-        const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
-
-        // 1. Prioritize Resend HTTP REST API (fastest, robust on cloud hosts like Render with firewalled SMTP)
-        if (resendClient) {
-            const toList = Array.isArray(to) ? to : (to ? [to] : []);
-            const bccList = Array.isArray(bcc) ? bcc : (bcc ? [bcc] : undefined);
-            let sendFrom = getFromAddress(true);
-
-            let resendResponse;
-            try {
-                resendResponse = await withTimeout(
-                    resendClient.emails.send({
-                        from: sendFrom,
-                        to: toList.length > 0 ? toList : [sendFrom],
-                        bcc: bccList,
-                        subject,
-                        html,
-                        text: plainText,
-                    }),
-                    7000,
-                    "Resend API request timed out after 7000ms"
-                );
-            } catch (timeoutOrErr) {
-                console.warn("[CollabX Resend Exception]", timeoutOrErr.message);
-                resendResponse = { error: timeoutOrErr };
-            }
-
-            // Auto-heal: If custom sender domain fails verification, retry with verified onboarding sender
-            if (
-                resendResponse?.error &&
-                sendFrom !== FALLBACK_RESEND_FROM &&
-                (resendResponse.error.message?.includes("domain is not verified") ||
-                 resendResponse.error.message?.includes("validation_error") ||
-                 resendResponse.error.message?.includes("not verified"))
-            ) {
-                console.warn(`[CollabX Resend] Domain "${sendFrom}" unverified. Retrying with fallback sender "${FALLBACK_RESEND_FROM}"...`);
-                try {
-                    resendResponse = await withTimeout(
-                        resendClient.emails.send({
-                            from: FALLBACK_RESEND_FROM,
-                            to: toList.length > 0 ? toList : [FALLBACK_RESEND_FROM],
-                            bcc: bccList,
-                            subject,
-                            html,
-                            text: plainText,
-                        }),
-                        7000,
-                        "Resend API retry timed out after 7000ms"
-                    );
-                } catch (retryErr) {
-                    resendResponse = { error: retryErr };
-                }
-            }
-
-            if (!resendResponse?.error && resendResponse?.data) {
-                return { sent: true, emailId: resendResponse.data.id, transport: "resend" };
-            }
-
-            console.warn("[CollabX Resend Failure]", resendResponse?.error?.message || "Unknown Resend error");
-
-            // Only attempt SMTP fallback if SMTP is explicitly configured
-            if (!hasSmtp) {
-                return { sent: false, reason: resendResponse?.error?.message || "Resend email delivery failed" };
-            }
+        // 2. Secondary: Resend REST API (POST https://api.resend.com/emails)
+        if (resendKey) {
+            return await sendViaResend({ apiKey: resendKey, to, subject, html, text, bcc });
         }
 
-        // 2. Fallback to SMTP if Resend was unavailable or failed and SMTP is configured
+        // 3. Tertiary: Nodemailer SMTP with short timeouts
         if (hasSmtp) {
-            const transporter = getSmtpTransporter();
-            const from = getFromAddress(false);
-            const mailOptions = {
-                from,
-                to: to || undefined,
-                bcc: bcc || undefined,
-                subject,
-                html,
-                text: plainText,
-            };
-            const info = await withTimeout(
-                transporter.sendMail(mailOptions),
-                7000,
-                "SMTP dispatch timed out after 7000ms"
-            );
-            return { sent: true, messageId: info?.messageId, transport: "smtp" };
+            return await sendViaSmtp({ to, subject, html, text, bcc });
         }
 
-        return { sent: false, reason: "No active email transport" };
+        // Universal Fallback: Gracefully report unconfigured transport
+        if (process.env.NODE_ENV !== "production") {
+            const recipients = Array.isArray(to) ? to.join(", ") : to || (Array.isArray(bcc) ? bcc.join(", ") : bcc);
+            console.log(`[CollabX Dev Mailer] (No Brevo/Resend/SMTP configured) Recipient: ${recipients} | Subject: "${subject}"`);
+        }
+        return {
+            sent: false,
+            reason: "No email transport configured in environment (set BREVO_API_KEY, RESEND_API_KEY, or SMTP_*)",
+        };
     } catch (err) {
-        console.warn("[CollabX Email Notice]", err.message);
+        console.warn("[CollabX Universal Mailer Exception]", err.message);
         return { sent: false, reason: err.message };
     }
 };

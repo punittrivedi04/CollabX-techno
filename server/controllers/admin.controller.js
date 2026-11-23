@@ -2250,6 +2250,10 @@ export const transitionUserRole = async (req, res, next) => {
                 to: updatedUser.email,
                 name: updatedUser.name,
                 role: requestedRole,
+            }).then((mailRes) => {
+                if (!mailRes?.sent) {
+                    console.warn("[Admin User Approval Email Notice]", mailRes?.reason);
+                }
             }).catch((mailErr) => {
                 console.warn("[Admin User Approval Email Notice]", mailErr.message);
             });
@@ -2433,13 +2437,16 @@ export const createAdminAnnouncement = async (req, res, next) => {
                 const emails = recRes.rows.map((r) => r.email).filter(Boolean);
 
                 if (emails.length > 0) {
-                    await sendAnnouncementEmail({
+                    const mailRes = await sendAnnouncementEmail({
                         to: emails,
                         title: inserted.title,
                         content: inserted.content,
                         authorName: req.user.name,
                         authorRole: req.user.role || "Administrator",
                     });
+                    if (!mailRes?.sent) {
+                        console.warn("[Admin Announcement Email Notice]", mailRes?.reason);
+                    }
                 }
             } catch (mailErr) {
                 console.warn("[Admin Announcement Email Notice]", mailErr.message);
