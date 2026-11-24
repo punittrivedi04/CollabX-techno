@@ -9,16 +9,10 @@
     <script>
       (function () {
         try {
-          var t = localStorage.getItem("collabx_theme");
-          if (t === "dark" || t === "obsidian") {
-            document.documentElement.className = "dark";
-            document.documentElement.setAttribute("data-theme", "dark");
-            document.documentElement.style.colorScheme = "dark";
-          } else {
-            document.documentElement.className = "light";
-            document.documentElement.setAttribute("data-theme", "light");
-            document.documentElement.style.colorScheme = "light";
-          }
+          localStorage.setItem("collabx_theme", "light");
+          document.documentElement.className = "light";
+          document.documentElement.setAttribute("data-theme", "light");
+          document.documentElement.style.colorScheme = "light";
         } catch (e) {}
       })();
     </script>

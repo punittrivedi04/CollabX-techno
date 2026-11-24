@@ -293,7 +293,7 @@ export default function Dashboard() {
     "inline-flex items-center justify-center gap-1.5 rounded-full bg-[#141715] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a]";
 
   const overviewActionButtonClass =
-    "inline-flex items-center justify-center gap-1.5 rounded-full bg-[#141715] px-4 py-2 text-xs font-bold text-white shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] group-hover:bg-[#1b5e3a] dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a] dark:group-hover:bg-[#1b5e3a]";
+    "inline-flex items-center justify-center gap-1.5 rounded-full border border-[#2A3321] bg-[#121412] px-4 py-2 text-xs font-bold text-[#A3E635] shadow-2xs transition-all duration-200 hover:cursor-pointer hover:bg-[#1F5E3B] hover:text-white group-hover:bg-[#1F5E3B] group-hover:text-white dark:border-[#2A3321] dark:bg-[#121412] dark:text-[#A3E635] dark:hover:bg-[#1F5E3B] dark:hover:text-white dark:group-hover:bg-[#1F5E3B] dark:group-hover:text-white";
 
   const neutralOutlineBtnClass =
     "inline-flex items-center justify-center gap-1.5 rounded-full border border-black/15 bg-white px-4 py-2 text-xs font-bold text-neutral-900 shadow-2xs transition-all duration-200 hover:cursor-pointer hover:border-black/35 hover:bg-neutral-50 dark:border-white/15 dark:bg-[#101014] dark:text-white dark:hover:border-white/35 dark:hover:bg-[#18181E]";
@@ -336,7 +336,7 @@ export default function Dashboard() {
 
             <Link
               to="/projects"
-              className={`${greenButtonClass} w-full px-5 py-2.5 sm:w-auto`}
+              className={`${overviewActionButtonClass} w-full px-5 py-2.5 sm:w-auto`}
             >
               <Plus size={16} strokeWidth={2} />
               <span>New Project</span>
@@ -556,7 +556,7 @@ export default function Dashboard() {
                 </p>
               </div>
 
-              <Link to="/projects" className={greenButtonClass}>
+              <Link to="/projects" className={overviewActionButtonClass}>
                 <span>View all</span>
                 <ArrowUpRight size={13} strokeWidth={1.85} />
               </Link>
@@ -603,7 +603,7 @@ export default function Dashboard() {
                                 href={project.demoUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 rounded-full bg-[#141715] px-3 py-1 text-[11px] font-bold text-white transition-all duration-200 hover:cursor-pointer hover:bg-[#1b5e3a] hover:text-white dark:bg-[#141715] dark:text-white dark:hover:bg-[#1b5e3a] dark:hover:text-white"
+                                className="inline-flex items-center gap-1 rounded-full border border-[#2A3321] bg-[#121412] px-3 py-1 text-[11px] font-bold text-[#A3E635] transition-all duration-200 hover:cursor-pointer hover:bg-[#1F5E3B] hover:text-white group-hover:bg-[#1F5E3B] group-hover:text-white dark:border-[#2A3321] dark:bg-[#121412] dark:text-[#A3E635] dark:hover:bg-[#1F5E3B] dark:hover:text-white dark:group-hover:bg-[#1F5E3B] dark:group-hover:text-white"
                               >
                                 <span>View Demo</span>
                                 <ArrowUpRight size={12} strokeWidth={1.85} />
@@ -682,7 +682,7 @@ export default function Dashboard() {
               </p>
             </div>
             {!isDirector && (
-              <Link to="/tasks" className={greenButtonClass}>
+              <Link to="/tasks" className={overviewActionButtonClass}>
                 <span>View all</span>
                 <ArrowUpRight size={13} strokeWidth={1.85} />
               </Link>
@@ -770,7 +770,7 @@ export default function Dashboard() {
                 Invite members and manage squad permissions.
               </p>
             </div>
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1E6B4B] text-white transition-all duration-200 group-hover:bg-[#15803D] dark:bg-[#22C55E] dark:text-[#090D0B] dark:group-hover:bg-[#A3E635]">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#2A3321] bg-[#121412] text-[#A3E635] transition-all duration-200 hover:bg-[#1F5E3B] hover:text-white group-hover:bg-[#1F5E3B] group-hover:text-white dark:border-[#2A3321] dark:bg-[#121412] dark:text-[#A3E635] dark:hover:bg-[#1F5E3B] dark:hover:text-white dark:group-hover:bg-[#1F5E3B] dark:group-hover:text-white">
               <ArrowUpRight size={16} strokeWidth={1.85} />
             </span>
           </Link>
@@ -790,7 +790,7 @@ export default function Dashboard() {
                 Check real-time commits, tasks and updates.
               </p>
             </div>
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1E6B4B] text-white transition-all duration-200 group-hover:bg-[#15803D] dark:bg-[#22C55E] dark:text-[#090D0B] dark:group-hover:bg-[#A3E635]">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#2A3321] bg-[#121412] text-[#A3E635] transition-all duration-200 hover:bg-[#1F5E3B] hover:text-white group-hover:bg-[#1F5E3B] group-hover:text-white dark:border-[#2A3321] dark:bg-[#121412] dark:text-[#A3E635] dark:hover:bg-[#1F5E3B] dark:hover:text-white dark:group-hover:bg-[#1F5E3B] dark:group-hover:text-white">
               <ArrowUpRight size={16} strokeWidth={1.85} />
             </span>
           </Link>
