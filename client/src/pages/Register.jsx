@@ -17,6 +17,7 @@ import {
   RotateCw,
   ShieldCheck,
   Building2,
+  KeyRound,
 } from "lucide-react";
 
 const CAMPUS_BG_PRIMARY = "/22.png";
@@ -34,7 +35,9 @@ export default function Register() {
   const { register, verifyOtp, resendOtp } = useAuth();
 
   // Step: "form" | "otp"
-  const [step, setStep] = useState("form");
+  const [step, setStep] = useState(
+    location.state?.step === "otp" ? "otp" : "form"
+  );
 
   // Resilient image fallbacks for local public assets
   const [bgSrc, setBgSrc] = useState(CAMPUS_BG_PRIMARY);
@@ -53,13 +56,17 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [errorCode, setErrorCode] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState(
+    location.state?.message || ""
+  );
   const [loading, setLoading] = useState(false);
 
   // OTP Verification state
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
-  const [otpToken, setOtpToken] = useState("");
-  const [targetEmail, setTargetEmail] = useState("");
+  const [otpToken, setOtpToken] = useState(location.state?.otpToken || "");
+  const [targetEmail, setTargetEmail] = useState(
+    location.state?.email || ""
+  );
   const [timeLeft, setTimeLeft] = useState(120);
   const [resending, setResending] = useState(false);
   const inputRefs = useRef([]);
@@ -67,8 +74,19 @@ export default function Register() {
   useEffect(() => {
     if (location.state?.email) {
       setForm((prev) => ({ ...prev, email: location.state.email }));
+      setTargetEmail(location.state.email);
     }
-  }, [location.state?.email]);
+    if (location.state?.otpToken) {
+      setOtpToken(location.state.otpToken);
+    }
+    if (location.state?.step === "otp") {
+      setStep("otp");
+      setTimeLeft(120);
+    }
+    if (location.state?.message) {
+      setSuccessMessage(location.state.message);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     if (step !== "otp" || timeLeft <= 0) return;
@@ -92,8 +110,45 @@ export default function Register() {
     setErrorCode("");
     setSuccessMessage("");
 
+    const cleanName = form.name.trim();
+    if (!cleanName || cleanName.length < 2) {
+      setError("Please enter your full name (at least 2 characters).");
+      return;
+    }
+
+    const cleanEmail = form.email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setError("Please enter your email address.");
+      return;
+    }
+
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(cleanEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    const cleanRollNo = form.rollNo
+      ? form.rollNo.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
+      : "";
+
+    if (!cleanRollNo) {
+      setError("Please enter your Roll number / Faculty ID.");
+      return;
+    }
+
+    if (!form.password) {
+      setError("Please enter a password.");
+      return;
+    }
+
     if (form.password.length < 8) {
       setError("Password must contain at least 8 characters.");
+      return;
+    }
+
+    if (!form.confirmPassword) {
+      setError("Please confirm your password.");
       return;
     }
 
@@ -104,20 +159,16 @@ export default function Register() {
 
     setLoading(true);
 
-    const cleanRollNo = form.rollNo
-      ? form.rollNo.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
-      : null;
-
     try {
       const res = await register(
-        form.name.trim(),
-        form.email.trim(),
+        cleanName,
+        cleanEmail,
         form.password,
         cleanRollNo,
       );
 
       setOtpToken(res.otpToken);
-      setTargetEmail(res.email || form.email.trim().toLowerCase());
+      setTargetEmail(res.email || cleanEmail);
       setTimeLeft(120);
       setOtpDigits(["", "", "", "", "", ""]);
       setStep("otp");
@@ -225,7 +276,7 @@ export default function Register() {
             email: targetEmail,
             message:
               res?.message ||
-              "Email verified! Your account is awaiting Admin approval and role classification.",
+              "Email verified! Your account is pending Admin approval before you can log in.",
           },
         });
         return;
@@ -253,7 +304,7 @@ export default function Register() {
       }}
       className="relative flex min-h-screen w-full flex-col items-center justify-center overflow-x-hidden bg-[#161817] px-4 py-5 text-[#202124] antialiased selection:bg-[#36B56B]/20 selection:text-[#202124] sm:px-6 sm:py-7"
     >
-      {/* Full-Screen Techno India NJR Campus Background */}
+      {/* Full-Screen Techno NJR Campus Background */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <img
           src={bgSrc}
@@ -294,7 +345,7 @@ export default function Register() {
             <div className="inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-2.5 py-1">
               <img
                 src={logoSrc}
-                alt="Techno India NJR"
+                alt="Techno NJR"
                 onError={() => {
                   if (logoSrc !== TECHNO_LOGO_FALLBACK) {
                     setLogoSrc(TECHNO_LOGO_FALLBACK);
@@ -320,7 +371,7 @@ export default function Register() {
           <aside className="relative flex min-h-[210px] flex-col justify-between overflow-hidden border-b border-black/10 bg-[#1B1D1C] text-white sm:min-h-[250px] lg:col-span-5 lg:min-h-full lg:rounded-l-2xl lg:border-b-0 lg:border-r">
             <img
               src={leftSrc}
-              alt="Techno India NJR Institute of Technology Campus"
+              alt="Techno NJR Institute of Technology Campus"
               onError={() => {
                 if (leftSrc !== LEFT_CAMPUS_FALLBACK) {
                   setLeftSrc(LEFT_CAMPUS_FALLBACK);
@@ -479,20 +530,6 @@ export default function Register() {
                           className="w-full rounded-xl border border-black/12 bg-white py-2.5 pl-10 pr-4 text-sm text-[#202124] shadow-[0_1px_2px_rgba(0,0,0,0.03)] outline-none transition-all duration-150 placeholder:text-[#9AA0A6] hover:border-black/25 focus:border-[#202124] focus:ring-3 focus:ring-[#36B56B]/20"
                         />
                       </div>
-                      {form.email.trim().toLowerCase().endsWith("@technonjr.org") && (
-                        <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-[#184E2F]">
-                          <ShieldCheck
-                            size={14}
-                            strokeWidth={1.85}
-                            className="shrink-0 text-[#269353]"
-                          />
-                       <a href="https://technonjr.org/" target="_blank" rel="noopener noreferrer">
-              <span className="text-[11px] font-semibold tracking-tight text-[#202124]">
-                Techno NJR
-              </span>
-                    </a>
-                        </p>
-                      )}
                     </div>
 
                     <div>
@@ -510,18 +547,20 @@ export default function Register() {
                         />
                         <input
                           id="register-roll"
+                          required
                           maxLength={30}
                           autoCapitalize="characters"
                           placeholder="e.g. 25ETCCS149 or FAC102"
                           value={form.rollNo}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            if (error) setError("");
                             setForm({
                               ...form,
                               rollNo: e.target.value
                                 .replace(/[^a-zA-Z0-9]/g, "")
                                 .toUpperCase(),
-                            })
-                          }
+                            });
+                          }}
                           className="w-full rounded-xl border border-black/12 bg-white py-2.5 pl-10 pr-4 font-mono text-sm text-[#202124] shadow-[0_1px_2px_rgba(0,0,0,0.03)] outline-none transition-all duration-150 placeholder:text-[#9AA0A6] hover:border-black/25 focus:border-[#202124] focus:ring-3 focus:ring-[#36B56B]/20"
                         />
                       </div>
@@ -798,7 +837,7 @@ export default function Register() {
 
         {/* Minimal Institutional Footer */}
         <footer className="mt-4 text-center text-xs font-medium text-white/85">
-          © 2026 CollabX · Techno India NJR Institute of Technology
+          © 2026 CollabX · Techno NJR Institute of Technology
         </footer>
       </div>
     </div>

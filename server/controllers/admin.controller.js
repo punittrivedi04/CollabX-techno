@@ -128,10 +128,10 @@ export const getAdminOverview = async (req, res, next) => {
             ] = await Promise.all([
                 pool.query(`
                     SELECT
-                        (SELECT COUNT(*)::int FROM users WHERE LOWER(COALESCE(role, 'student')) = 'student') AS total_students,
-                        (SELECT COUNT(*)::int FROM users WHERE LOWER(COALESCE(role, 'student')) = 'student' AND is_active = TRUE) AS active_students,
-                        (SELECT COUNT(*)::int FROM users WHERE LOWER(role) IN ('mentor', 'faculty')) AS total_mentors,
-                        (SELECT COUNT(*)::int FROM users WHERE LOWER(role) IN ('mentor', 'faculty') AND is_active = TRUE) AS active_mentors,
+                        (SELECT COUNT(*)::int FROM users WHERE LOWER(COALESCE(role, 'student')) = 'student' AND is_verified = TRUE) AS total_students,
+                        (SELECT COUNT(*)::int FROM users WHERE LOWER(COALESCE(role, 'student')) = 'student' AND is_active = TRUE AND is_verified = TRUE) AS active_students,
+                        (SELECT COUNT(*)::int FROM users WHERE LOWER(role) IN ('mentor', 'faculty') AND is_verified = TRUE) AS total_mentors,
+                        (SELECT COUNT(*)::int FROM users WHERE LOWER(role) IN ('mentor', 'faculty') AND is_active = TRUE AND is_verified = TRUE) AS active_mentors,
                         (SELECT COUNT(*)::int FROM projects) AS total_teams,
                         (
                             SELECT COUNT(*)::int FROM projects p
@@ -150,7 +150,7 @@ export const getAdminOverview = async (req, res, next) => {
                         ) AS completed_projects,
                         (SELECT COUNT(*)::int FROM tasks WHERE status != 'Completed') AS pending_tasks,
                         (SELECT COUNT(*)::int FROM tasks WHERE status = 'Completed') AS completed_tasks,
-                        (SELECT COUNT(*)::int FROM users WHERE COALESCE(role_classified, FALSE) = FALSE AND LOWER(COALESCE(role, 'student')) = 'student') AS unclassified_accounts
+                        (SELECT COUNT(*)::int FROM users WHERE is_verified = TRUE AND is_active = FALSE AND COALESCE(role_classified, FALSE) = FALSE AND LOWER(COALESCE(role, 'student')) = 'student') AS unclassified_accounts
                 `),
                 pool.query(`
                     SELECT u.id, u.name, u.email, u.roll_no, u.role, u.phone, u.mentor_id, u.role_classified,
@@ -159,6 +159,7 @@ export const getAdminOverview = async (req, res, next) => {
                     FROM users u
                     LEFT JOIN users m ON m.id = u.mentor_id
                     WHERE LOWER(COALESCE(u.role, 'student')) = 'student'
+                      AND u.is_verified = TRUE
                     ORDER BY u.created_at DESC, u.id DESC
                     LIMIT 8;
                 `),
@@ -469,12 +470,15 @@ export const getAdminStudents = async (req, res, next) => {
                 )`);
             }
 
+            // Admin student lists and approval queues only return verified accounts
+            conditions.push("u.is_verified = TRUE");
+
             if (statusFilter === "active") {
                 conditions.push("u.is_active = TRUE");
             } else if (statusFilter === "inactive") {
                 conditions.push("u.is_active = FALSE");
             } else if (statusFilter === "unclassified") {
-                conditions.push("COALESCE(u.role_classified, FALSE) = FALSE");
+                conditions.push("u.is_active = FALSE AND COALESCE(u.role_classified, FALSE) = FALSE");
             }
 
             const whereClause = conditions.join(" AND ");
@@ -1090,7 +1094,7 @@ export const updateStudentStatus = async (req, res, next) => {
         }
 
         const { rows: existingRows } = await pool.query(
-            "SELECT id, name, email, role, is_active FROM users WHERE id = $1",
+            "SELECT id, name, email, role, is_active, is_verified FROM users WHERE id = $1",
             [studentId]
         );
         if (existingRows.length === 0) {
@@ -1098,6 +1102,12 @@ export const updateStudentStatus = async (req, res, next) => {
         }
 
         const existing = existingRows[0];
+        if (nextActive === true && !existing.is_verified) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot activate an unverified account. The student must verify their email via OTP first.",
+            });
+        }
         if (isProtectedAccount(existing)) {
             return res.status(403).json({ success: false, message: "Cannot change status of admin or director accounts" });
         }
@@ -2163,6 +2173,14 @@ export const transitionUserRole = async (req, res, next) => {
             }
         }
 
+        if (!targetUser.is_verified) {
+            await client.query("ROLLBACK");
+            return res.status(400).json({
+                success: false,
+                message: "Cannot approve or classify an account that has not verified their email via OTP.",
+            });
+        }
+
         const wasPendingApproval =
             targetUser.role_classified === false ||
             (approve === true && targetUser.is_active === false);
@@ -2522,7 +2540,7 @@ export const getAdminUsers = async (req, res, next) => {
             SELECT id, name, email, roll_no, role, phone, mentor_id,
                    role_classified, is_verified, is_active, created_at
             FROM users
-            WHERE 1=1
+            WHERE is_verified = TRUE
         `;
         const params = [];
         let paramIdx = 1;
@@ -2534,10 +2552,14 @@ export const getAdminUsers = async (req, res, next) => {
         }
 
         if (status && status !== "all") {
-            const isActive = status === "active";
-            query += ` AND is_active = $${paramIdx}`;
-            params.push(isActive);
-            paramIdx++;
+            if (status === "unclassified") {
+                query += " AND is_active = FALSE AND COALESCE(role_classified, FALSE) = FALSE";
+            } else {
+                const isActive = status === "active";
+                query += ` AND is_active = $${paramIdx}`;
+                params.push(isActive);
+                paramIdx++;
+            }
         }
 
         if (search && search.trim()) {

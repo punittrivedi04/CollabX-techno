@@ -22,6 +22,7 @@ const loginAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: LOGIN_LOCKO
 const MAX_OTP_ATTEMPTS = 5;
 const otpAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: 5 * 60 * 1000 });
 const consumedOtpTokens = new MicroCache({ maxEntries: 2000, ttlMs: 3 * 60 * 1000 });
+const recentLoginNotifsCache = new MicroCache({ maxEntries: 2000, ttlMs: 6 * 60 * 60 * 1000 });
 
 const hashKey = (str) => crypto.createHash("sha256").update(String(str)).digest("hex").slice(0, 24);
 
@@ -110,34 +111,7 @@ export const loginUser = async (req, res, next) => {
 
         const user = rows[0];
 
-        // Ensure verified @technonjr.org accounts are auto-approved and bypass the approval queue
-        const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
-        if (isTechnoNjr && user.is_verified && (user.is_active === false || user.role_classified === false)) {
-            await pool.query(
-                "UPDATE users SET is_active = TRUE, role_classified = TRUE WHERE id = $1;",
-                [user.id]
-            );
-            user.is_active = true;
-            user.role_classified = true;
-        }
-
-        if (user.is_active === false && user.role_classified === false) {
-            return res.status(403).json({
-                success: false,
-                code: "AWAITING_APPROVAL",
-                message: "Your account is awaiting Admin approval and role classification.",
-            });
-        }
-
-        if (user.is_active === false) {
-            return res.status(403).json({
-                success: false,
-                code: "ACCOUNT_DEACTIVATED",
-                message: "Your account has been deactivated. Please contact an administrator.",
-            });
-        }
-
-        // 2. Validate password
+        // 2. Validate password first (prevents unauthenticated user enumeration & OTP bombing)
         const passwordMatches = await bcrypt.compare(password, user.password_hash);
         if (!passwordMatches) {
             const nextCount = (attemptRecord?.count || 0) + 1;
@@ -159,6 +133,56 @@ export const loginUser = async (req, res, next) => {
         // Clear failed-attempt counter on successful authentication
         loginAttemptsCache.delete(cleanEmail);
 
+        // 3. Verification Check: Block unverified accounts from logging in; dispatch fresh OTP
+        if (!user.is_verified) {
+            const otp = generateSecureOtp();
+            const otpHash = await bcrypt.hash(otp, 10);
+            const otpToken = jwt.sign(
+                { email: cleanEmail, otpHash, purpose: "signup" },
+                process.env.JWT_SECRET,
+                { expiresIn: "2m", algorithm: "HS256" }
+            );
+
+            // Dispatch verification OTP to email non-blockingly
+            sendOtpEmail({
+                to: cleanEmail,
+                name: user.name || "Student",
+                otp,
+                purpose: "signup",
+            }).catch((emailErr) => {
+                console.error("[Login Verification OTP Dispatch Failed]:", emailErr?.message);
+            });
+
+            return res.status(403).json({
+                success: false,
+                code: "ACCOUNT_NOT_VERIFIED",
+                requiresOtp: true,
+                otpToken,
+                email: cleanEmail,
+                message: "Your email has not been verified. A 6-digit verification code has been sent to your email.",
+            });
+        }
+
+        // 4. Ensure verified @technonjr.org accounts are auto-approved
+        const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
+        if (isTechnoNjr && (user.is_active === false || user.role_classified === false)) {
+            await pool.query(
+                "UPDATE users SET is_active = TRUE, role_classified = TRUE WHERE id = $1;",
+                [user.id]
+            );
+            user.is_active = true;
+            user.role_classified = true;
+        }
+
+        // 5. Block unapproved accounts (external emails verified via OTP awaiting Admin approval)
+        if (user.is_active === false) {
+            return res.status(403).json({
+                success: false,
+                code: "PENDING_ADMIN_APPROVAL",
+                message: "Your account is verified and awaiting Admin approval.",
+            });
+        }
+
         // 3. Issue dual JWTs
         const accessToken = createAccessToken(user.id);
         const refreshToken = createRefreshToken(user.id);
@@ -170,6 +194,45 @@ export const loginUser = async (req, res, next) => {
         );
 
         setRefreshTokenCookie(res, refreshToken);
+
+        // Notify Admin(s) that this @technonjr.org user logged in (avoiding duplicate spam: max 1 per 6 hours per user)
+        if (isTechnoNjr && !recentLoginNotifsCache.get(cleanEmail)) {
+            recentLoginNotifsCache.set(cleanEmail, true);
+            (async () => {
+                try {
+                    const adminRes = await pool.query(`
+                        SELECT id FROM users
+                        WHERE LOWER(role) IN ('admin', 'coordinator') AND is_active = TRUE;
+                    `);
+                    const io = req.app.get("io");
+                    const notifTitle = "@technonjr.org Student Login";
+                    const notifMsg = `${user.name} (${cleanEmail}${user.roll_no ? ` · Roll: ${user.roll_no}` : ""}) logged into CollabX.`;
+
+                    for (const admin of adminRes.rows) {
+                        const ins = await pool.query(`
+                            INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                            VALUES ($1, $2, $3, 'student_login', FALSE, NOW())
+                            RETURNING id, title, message, type, is_read, created_at;
+                        `, [admin.id, notifTitle, notifMsg]);
+
+                        if (io && ins.rows[0]) {
+                            io.to(`user:${admin.id}`).emit("notification:new", {
+                                id: ins.rows[0].id,
+                                _id: ins.rows[0].id,
+                                title: ins.rows[0].title,
+                                message: ins.rows[0].message,
+                                type: ins.rows[0].type,
+                                link: "/admin/students",
+                                isRead: false,
+                                createdAt: ins.rows[0].created_at,
+                            });
+                        }
+                    }
+                } catch (loginNotifErr) {
+                    console.warn("[Admin Login Notification] Notice:", loginNotifErr.message);
+                }
+            })();
+        }
 
         return res.status(200).json({
             success: true,
@@ -289,7 +352,14 @@ export const registerUser = async (req, res, next) => {
             }
         }
 
-        // Check email domain for Techno NJR institutional auto-approval
+        if (!cleanRollNo) {
+            return res.status(400).json({
+                success: false,
+                message: "Roll number / Faculty ID is required",
+            });
+        }
+
+        // Check email domain: @technonjr.org vs external email
         const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
         let isNewPendingSignup = false;
         let createdUserId = null;
@@ -304,100 +374,28 @@ export const registerUser = async (req, res, next) => {
                 });
             }
 
-            // Update unverified user credentials
-            // @technonjr.org accounts are auto-approved (is_active=TRUE, role_classified=TRUE)
-            // Non-technonjr accounts stay pending Admin approval & role classification
+            // Update unverified user credentials — strictly unverified and inactive until OTP is verified
             const updateRes = await pool.query(`
                 UPDATE users
                 SET name = $1,
                     password_hash = $2,
                     roll_no = COALESCE($3, roll_no),
-                    is_active = $4,
-                    role_classified = $5
-                WHERE id = $6
+                    is_verified = FALSE,
+                    is_active = FALSE,
+                    role_classified = FALSE
+                WHERE id = $4
                 RETURNING id;
-            `, [cleanName, passwordHash, cleanRollNo, isTechnoNjr, isTechnoNjr, existingUser.id]);
+            `, [cleanName, passwordHash, cleanRollNo, existingUser.id]);
             createdUserId = updateRes.rows[0]?.id || existingUser.id;
         } else {
-            // Create new user: @technonjr.org accounts bypass approval queue directly with Student role
+            // Create new user: strictly unverified and inactive until OTP verification
             const insertRes = await pool.query(`
                 INSERT INTO users (name, email, password_hash, roll_no, role, is_verified, is_active, role_classified, created_at)
-                VALUES ($1, $2, $3, $4, 'student', FALSE, $5, $6, NOW())
+                VALUES ($1, $2, $3, $4, 'student', FALSE, FALSE, FALSE, NOW())
                 RETURNING id;
-            `, [cleanName, cleanEmail, passwordHash, cleanRollNo, isTechnoNjr, isTechnoNjr]);
+            `, [cleanName, cleanEmail, passwordHash, cleanRollNo]);
             isNewPendingSignup = true;
             createdUserId = insertRes.rows[0]?.id;
-        }
-
-        // Send notifications (Admin notification + User welcome notification)
-        try {
-            const adminRes = await pool.query(`
-                SELECT id
-                FROM users
-                WHERE LOWER(role) IN ('admin', 'coordinator')
-                  AND is_active = TRUE;
-            `);
-            const io = req.app.get("io");
-
-            const adminNotifTitle = isTechnoNjr
-                ? "New @technonjr.org Account Created"
-                : "New Account Awaiting Approval";
-            const adminNotifMsg = isTechnoNjr
-                ? `${cleanName} (${cleanEmail}${cleanRollNo ? ` · Roll: ${cleanRollNo}` : ""}) registered an institutional account with Student access.`
-                : `${cleanName} (${cleanEmail}) registered and is awaiting Admin approval and role classification. Review at /admin/roles`;
-            const adminNotifType = isTechnoNjr ? "account_created" : "role_approval";
-            const adminNotifLink = isTechnoNjr ? "/admin/students" : "/admin/roles";
-
-            for (const admin of adminRes.rows) {
-                const ins = await pool.query(
-                    `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                     VALUES ($1, $2, $3, $4, FALSE, NOW())
-                     RETURNING id, title, message, type, is_read, created_at;`,
-                    [admin.id, adminNotifTitle, adminNotifMsg, adminNotifType]
-                );
-                if (io && ins.rows[0]) {
-                    io.to(`user:${admin.id}`).emit("notification:new", {
-                        id: ins.rows[0].id,
-                        _id: ins.rows[0].id,
-                        title: ins.rows[0].title,
-                        message: ins.rows[0].message,
-                        type: ins.rows[0].type,
-                        link: adminNotifLink,
-                        isRead: false,
-                        createdAt: ins.rows[0].created_at,
-                    });
-                }
-            }
-
-            // User-side welcome/account-created notification
-            if (createdUserId) {
-                const userNotifTitle = isTechnoNjr
-                    ? "Welcome to CollabX!"
-                    : "Registration Received";
-                const userNotifMsg = isTechnoNjr
-                    ? `Welcome to CollabX, ${cleanName}! Your @technonjr.org institutional account has been successfully created with Student access.`
-                    : `Hello ${cleanName}, your account has been registered and is pending administrator approval and role classification.`;
-                const userNotifType = isTechnoNjr ? "welcome" : "system";
-
-                await pool.query(
-                    `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
-                     VALUES ($1, $2, $3, $4, FALSE, NOW());`,
-                    [createdUserId, userNotifTitle, userNotifMsg, userNotifType]
-                );
-            }
-        } catch (notifErr) {
-            console.warn("[Signup Notification] Failed:", notifErr.message);
-        }
-
-        // Non-blocking welcome email delivery for institutional accounts
-        if (isTechnoNjr) {
-            sendWelcomeEmail({ to: cleanEmail, name: cleanName, role: "student" }).then((mailRes) => {
-                if (!mailRes?.sent) {
-                    console.warn("[Welcome Email Failure]", mailRes?.reason);
-                }
-            }).catch((emailErr) => {
-                console.warn("[Welcome Email Notice] Non-blocking delivery:", emailErr.message);
-            });
         }
 
         invalidateUserCache();
@@ -559,21 +557,72 @@ export const verifyOtp = async (req, res, next) => {
             const user = updateRes.rows[0];
             invalidateUserCache();
 
-            if (user.is_active === false && user.role_classified === false) {
+            // Send welcome notification and email now that account is verified
+            try {
+                const io = req.app.get("io");
+                const adminRes = await pool.query(`
+                    SELECT id FROM users
+                    WHERE LOWER(role) IN ('admin', 'coordinator') AND is_active = TRUE;
+                `);
+
+                const adminNotifTitle = isTechnoNjr
+                    ? "New @technonjr.org Account Verified"
+                    : "New Account Verified Awaiting Approval";
+                const adminNotifMsg = isTechnoNjr
+                    ? `${user.name} (${cleanEmail}${user.roll_no ? ` · Roll: ${user.roll_no}` : ""}) verified their institutional account with Student access.`
+                    : `${user.name} (${cleanEmail}) verified their email and is awaiting Admin approval and role classification. Review at /admin/roles`;
+                const adminNotifLink = isTechnoNjr ? "/admin/students" : "/admin/roles";
+
+                for (const admin of adminRes.rows) {
+                    const ins = await pool.query(
+                        `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                         VALUES ($1, $2, $3, 'account_created', FALSE, NOW())
+                         RETURNING id, title, message, type, is_read, created_at;`,
+                        [admin.id, adminNotifTitle, adminNotifMsg]
+                    );
+                    if (io && ins.rows[0]) {
+                        io.to(`user:${admin.id}`).emit("notification:new", {
+                            id: ins.rows[0].id,
+                            _id: ins.rows[0].id,
+                            title: ins.rows[0].title,
+                            message: ins.rows[0].message,
+                            type: ins.rows[0].type,
+                            link: adminNotifLink,
+                            isRead: false,
+                            createdAt: ins.rows[0].created_at,
+                        });
+                    }
+                }
+
+                await pool.query(
+                    `INSERT INTO notifications (user_id, title, message, type, is_read, created_at)
+                     VALUES ($1, $2, $3, 'welcome', FALSE, NOW());`,
+                    [
+                        user.id,
+                        isTechnoNjr ? "Welcome to CollabX!" : "Email Verified",
+                        isTechnoNjr
+                            ? `Welcome to CollabX, ${user.name}! Your @technonjr.org institutional account has been verified with Student access.`
+                            : `Hello ${user.name}, your email is verified. Your account is currently awaiting Admin approval and role classification.`
+                    ]
+                );
+
+                if (isTechnoNjr) {
+                    sendWelcomeEmail({ to: cleanEmail, name: user.name, role: user.role || "student" }).catch((emailErr) => {
+                        console.warn("[Welcome Email Notice]:", emailErr.message);
+                    });
+                }
+            } catch (notifErr) {
+                console.warn("[Signup Verification Notification] Failed:", notifErr.message);
+            }
+
+            // External emails (non-@technonjr.org): verified but inactive awaiting Admin approval
+            if (!isTechnoNjr || user.is_active === false) {
                 return res.status(200).json({
                     success: true,
                     pendingApproval: true,
-                    code: "AWAITING_APPROVAL",
-                    message: "Email verified! Your account is awaiting Admin approval and role classification.",
+                    code: "PENDING_ADMIN_APPROVAL",
+                    message: "Email verified! Your account is pending Admin approval before you can log in.",
                     user: safeUser(user),
-                });
-            }
-
-            if (user.is_active === false) {
-                return res.status(403).json({
-                    success: false,
-                    code: "ACCOUNT_DEACTIVATED",
-                    message: "Your account has been deactivated. Please contact an administrator.",
                 });
             }
 
@@ -947,10 +996,10 @@ export const refreshTokenHandler = async (req, res, next) => {
         }
 
         const user = rows[0];
-        if (user.is_active === false) {
+        if (user.is_verified === false || user.is_active === false) {
             return res.status(403).json({
                 success: false,
-                message: "User account has been deactivated.",
+                message: user.is_verified === false ? "User email is not verified." : "User account has been deactivated.",
             });
         }
 

@@ -107,6 +107,22 @@ export default function Login() {
     } catch (err) {
       const data = err?.response?.data;
       setErrorCode(data?.code || err?.code || "");
+
+      // Handle unverified accounts: redirect to OTP verification screen
+      if (data?.code === "ACCOUNT_NOT_VERIFIED" || data?.requiresOtp) {
+        navigate("/register", {
+          state: {
+            email: cleanEmail,
+            step: "otp",
+            otpToken: data.otpToken,
+            message:
+              data?.message ||
+              "Your email has not been verified. A 6-digit verification code has been sent to your email.",
+          },
+        });
+        return;
+      }
+
       setError(
         data?.message ||
           err?.message ||
@@ -238,7 +254,7 @@ export default function Login() {
       }}
       className="relative flex min-h-screen w-full flex-col items-center justify-center overflow-x-hidden bg-[#161817] px-4 py-5 text-[#202124] antialiased selection:bg-[#36B56B]/20 selection:text-[#202124] sm:px-6 sm:py-7"
     >
-      {/* Full-Screen Techno India NJR Campus Background */}
+      {/* Full-Screen Techno NJR Campus Background */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
         <img
           src={bgSrc}
@@ -273,7 +289,7 @@ export default function Login() {
             <div className="inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-2.5 py-1">
               <img
                 src={logoSrc}
-                alt="Techno India NJR"
+                alt="Techno NJR"
                 onError={() => {
                   if (logoSrc !== TECHNO_LOGO_FALLBACK) {
                     setLogoSrc(TECHNO_LOGO_FALLBACK);
@@ -296,7 +312,7 @@ export default function Login() {
           <aside className="relative flex min-h-[210px] flex-col justify-end overflow-hidden border-b border-black/10 bg-[#1B1D1C] text-white sm:min-h-[250px] lg:col-span-5 lg:min-h-full lg:rounded-l-2xl lg:border-b-0 lg:border-r">
             <img
               src={leftSrc}
-              alt="Techno India NJR Institute of Technology Campus"
+              alt="Techno NJR Institute of Technology Campus"
               onError={() => {
                 if (leftSrc !== LEFT_CAMPUS_FALLBACK) {
                   setLeftSrc(LEFT_CAMPUS_FALLBACK);
@@ -863,7 +879,7 @@ export default function Login() {
 
         {/* Minimal Institutional Footer */}
         <footer className="mt-4 text-center text-xs font-medium text-white/85">
-          © 2026 CollabX · Techno India NJR Institute of Technology
+          © 2026 CollabX · Techno NJR Institute of Technology
         </footer>
       </div>
     </div>

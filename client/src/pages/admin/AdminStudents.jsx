@@ -31,7 +31,7 @@ const EMPTY_FORM = {
   name: "",
   email: "",
   roll_no: "",
-  institution: "Techno India NJR Institute of Technology",
+  institution: "Techno NJR Institute of Technology",
   password: "",
 };
 
@@ -145,7 +145,7 @@ export default function AdminStudents() {
       name: stu.name || "",
       email: stu.email || "",
       roll_no: stu.roll_no || stu.rollNumber || "",
-      institution: stu.institution || "Techno India NJR Institute of Technology",
+      institution: stu.institution || "Techno NJR Institute of Technology",
       password: "",
     });
     setError("");
@@ -619,7 +619,7 @@ export default function AdminStudents() {
             </label>
             <input
               type="text"
-              value={form.institution || "Techno India NJR Institute of Technology"}
+              value={form.institution || "Techno NJR Institute of Technology"}
               disabled
               readOnly
               className="w-full cursor-not-allowed rounded-xl border border-black/10 bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-500 outline-none dark:border-white/10 dark:bg-[#101014]/80 dark:text-neutral-400"

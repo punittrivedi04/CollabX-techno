@@ -99,10 +99,10 @@ const protect = async (req, res, next) => {
             });
         }
 
-        if (user.is_active === false) {
+        if (user.is_verified === false || user.is_active === false) {
             return res.status(403).json({
                 success: false,
-                message: "User account has been deactivated.",
+                message: user.is_verified === false ? "User email is not verified." : "User account has been deactivated.",
             });
         }
 
