@@ -125,10 +125,12 @@ export const getProjectTeam = async (req, res, next) => {
 
         const cleanBaseUrl = getBaseClientUrl(req);
 
+        const canManageInvites = isAdmin || isOwner;
+
         const formattedInvites = await Promise.all(
             invitesRes.rows.map(async (i) => {
                 let token = i.token;
-                if (!token) {
+                if (canManageInvites && !token) {
                     token = crypto.randomBytes(32).toString("hex");
                     await pool.query("UPDATE invitations SET token = $1 WHERE id = $2", [token, i.id]).catch(() => {});
                 }
@@ -141,7 +143,7 @@ export const getProjectTeam = async (req, res, next) => {
                     pool.query("UPDATE invitations SET status = 'Expired' WHERE id = $1", [i.id]).catch(() => {});
                 }
 
-                const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
+                const invitationUrl = canManageInvites && token ? `${cleanBaseUrl}/team?invite=${token}` : undefined;
 
                 return {
                     id: i.id,
@@ -157,8 +159,7 @@ export const getProjectTeam = async (req, res, next) => {
                     role: i.role || "member",
                     status: effectiveStatus,
                     isExpired,
-                    token,
-                    invitationUrl,
+                    ...(canManageInvites ? { token, invitationUrl } : {}),
                     expiresAt,
                     sender: {
                         id: i.sender_id,

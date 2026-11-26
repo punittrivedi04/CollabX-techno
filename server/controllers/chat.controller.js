@@ -54,7 +54,7 @@ export const getChatMessages = async (req, res, next) => {
             return projRes.rows[0] || null;
         });
 
-        if (!project || (!isAdmin && project.status === "Archived")) {
+        if (!project) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
@@ -87,6 +87,13 @@ export const getChatMessages = async (req, res, next) => {
                     message: "You do not have access to this project chat",
                 });
             }
+        }
+
+        if (!isAdmin && project.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
         }
 
         const chatCacheKey = `chat:u:${userId}:r:${role}:p:${projectId}:c:${channel}`;
@@ -189,7 +196,7 @@ export const sendChatMessage = async (req, res, next) => {
             [projectId]
         );
 
-        if (projRes.rows.length === 0 || (!isAdmin && projRes.rows[0].status === "Archived")) {
+        if (projRes.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Project not found",
@@ -226,6 +233,13 @@ export const sendChatMessage = async (req, res, next) => {
                     });
                 }
             }
+        }
+
+        if (!isAdmin && project.status === "Archived") {
+            return res.status(404).json({
+                success: false,
+                message: "Project not found",
+            });
         }
 
         const insertRes = await pool.query(`

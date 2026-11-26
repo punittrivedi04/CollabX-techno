@@ -37,21 +37,11 @@ export const securityHeaders = (req, res, next) => {
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
 
-    // 8. Custom Content-Security-Policy (CSP) compatible with Vite, React, Tailwind, and Socket.IO
-    const cspDirectives = [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
-        "img-src 'self' data: blob: https:",
-        "connect-src 'self' ws: wss: http://localhost:* https://*",
-        "media-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-    ];
-    res.setHeader("Content-Security-Policy", cspDirectives.join("; "));
+    // 8. Strict Content-Security-Policy (CSP) for JSON API responses
+    res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    );
 
     next();
 };

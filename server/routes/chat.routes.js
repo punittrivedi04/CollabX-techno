@@ -7,19 +7,20 @@ import {
 } from "../controllers/chat.controller.js";
 import protect from "../middleware/auth.middleware.js";
 import { blockDirector } from "../middleware/directorGuard.js";
+import { requireProjectMember } from "../middleware/ownershipGuard.js";
 
 const router = express.Router();
 
 router.use(protect);
 router.use(blockDirector("Director account does not have access to project chat channels."));
 
-// Get project chat history
-router.get("/:projectId/messages", getChatMessages);
-router.get("/:projectId", getChatMessages);
+// Get project chat history (strict squad/owner/mentor/admin isolation)
+router.get("/:projectId/messages", requireProjectMember("projectId"), getChatMessages);
+router.get("/:projectId", requireProjectMember("projectId"), getChatMessages);
 
-// Send a new message
-router.post("/:projectId/messages", sendChatMessage);
-router.post("/:projectId", sendChatMessage);
+// Send a new message (strict squad/owner/mentor/admin isolation)
+router.post("/:projectId/messages", requireProjectMember("projectId"), sendChatMessage);
+router.post("/:projectId", requireProjectMember("projectId"), sendChatMessage);
 
 // Edit own message
 router.patch("/:projectId/messages/:messageId", editChatMessage);
