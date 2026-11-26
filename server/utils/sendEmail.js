@@ -9,12 +9,9 @@ dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 import nodemailer from "nodemailer";
-import { Resend } from "resend";
 
 let cachedTransporter = null;
 let lastSmtpConfig = null;
-let cachedResend = null;
-let lastResendKey = null;
 
 const getClientUrl = () => {
     const raw = process.env.CLIENT_URL || "http://localhost:5173";
@@ -24,7 +21,7 @@ const getClientUrl = () => {
 
 /**
  * Robustly parses a sender string (e.g. "CollabX <noreply@technonjr.org>" or "noreply@technonjr.org")
- * into a structured { name, email } object for APIs like Brevo.
+ * into a structured { name, email } object.
  */
 export const parseSender = (rawStr, defaultName = "CollabX", defaultEmail = "noreply@technonjr.org") => {
     if (!rawStr || typeof rawStr !== "string") {
@@ -90,176 +87,24 @@ const normalizeRecipients = (recipients) => {
 };
 
 /**
- * Brevo (Sendinblue) Transactional REST API Driver
- * POST https://api.brevo.com/v3/smtp/email
- */
-const sendViaBrevo = async ({ apiKey, to, subject, html, text, bcc }) => {
-    const rawSender = process.env.BREVO_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM;
-    const sender = parseSender(rawSender, "CollabX", "noreply@technonjr.org");
-
-    const toEmails = normalizeRecipients(to);
-    const bccEmails = normalizeRecipients(bcc);
-
-    if (toEmails.length === 0 && bccEmails.length === 0) {
-        return { sent: false, reason: "No recipient email addresses provided" };
-    }
-
-    // Brevo requires at least one address in 'to'.
-    // For BCC-only dispatches (e.g. campus announcements), populate 'to' with the sender's address.
-    const formattedTo = toEmails.length > 0
-        ? toEmails.map((email) => ({ email }))
-        : [{ email: sender.email, name: sender.name }];
-
-    const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
-
-    const payload = {
-        sender: { name: sender.name, email: sender.email },
-        to: formattedTo,
-        subject,
-        htmlContent: html,
-        textContent: plainText,
-    };
-
-    if (bccEmails.length > 0) {
-        payload.bcc = bccEmails.map((email) => ({ email }));
-    }
-
-    const response = await withTimeout(
-        fetch("https://api.brevo.com/v3/smtp/email", {
-            method: "POST",
-            headers: {
-                "api-key": apiKey,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            body: JSON.stringify(payload),
-        }),
-        7000,
-        "Brevo API request timed out after 7000ms"
-    );
-
-    const data = await response.json().catch(() => ({}));
-
-    if (response.ok) {
-        return {
-            sent: true,
-            transport: "brevo",
-            messageId: data?.messageId || "brevo-ok",
-        };
-    }
-
-    const reason = data?.message || data?.error || `Brevo HTTP error ${response.status}: ${response.statusText}`;
-    console.warn("[CollabX Brevo Error]", reason);
-    return { sent: false, reason };
-};
-
-/**
- * Resend Transactional REST API Driver
- */
-const getResendClient = (apiKey) => {
-    if (!apiKey) return null;
-    if (cachedResend && lastResendKey === apiKey) {
-        return cachedResend;
-    }
-    try {
-        cachedResend = new Resend(apiKey);
-        lastResendKey = apiKey;
-        return cachedResend;
-    } catch (e) {
-        console.warn("[getResendClient error]", e.message);
-        return null;
-    }
-};
-
-const sendViaResend = async ({ apiKey, to, subject, html, text, bcc }) => {
-    const resendClient = getResendClient(apiKey);
-    if (!resendClient) {
-        return { sent: false, reason: "Failed to initialize Resend client" };
-    }
-
-    const rawSender = process.env.RESEND_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM;
-    const defaultSender = "CollabX <onboarding@resend.dev>";
-    let sendFrom = rawSender?.trim() || defaultSender;
-
-    const toEmails = normalizeRecipients(to);
-    const bccEmails = normalizeRecipients(bcc);
-
-    if (toEmails.length === 0 && bccEmails.length === 0) {
-        return { sent: false, reason: "No recipient email addresses provided" };
-    }
-
-    const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
-    const toList = toEmails.length > 0 ? toEmails : [sendFrom];
-    const bccList = bccEmails.length > 0 ? bccEmails : undefined;
-
-    let resendResponse;
-    try {
-        resendResponse = await withTimeout(
-            resendClient.emails.send({
-                from: sendFrom,
-                to: toList,
-                bcc: bccList,
-                subject,
-                html,
-                text: plainText,
-            }),
-            7000,
-            "Resend API request timed out after 7000ms"
-        );
-    } catch (timeoutOrErr) {
-        console.warn("[CollabX Resend Exception]", timeoutOrErr.message);
-        resendResponse = { error: timeoutOrErr };
-    }
-
-    // Auto-heal: If custom domain unverified and wasn't already default sandbox sender, retry once
-    if (
-        resendResponse?.error &&
-        sendFrom !== defaultSender &&
-        (resendResponse.error.message?.includes("domain is not verified") ||
-         resendResponse.error.message?.includes("validation_error") ||
-         resendResponse.error.message?.includes("not verified"))
-    ) {
-        console.warn(`[CollabX Resend] Domain "${sendFrom}" unverified. Retrying with sandbox sender "${defaultSender}"...`);
-        try {
-            resendResponse = await withTimeout(
-                resendClient.emails.send({
-                    from: defaultSender,
-                    to: toEmails.length > 0 ? toEmails : [defaultSender],
-                    bcc: bccList,
-                    subject,
-                    html,
-                    text: plainText,
-                }),
-                7000,
-                "Resend API retry timed out after 7000ms"
-            );
-        } catch (retryErr) {
-            resendResponse = { error: retryErr };
-        }
-    }
-
-    if (!resendResponse?.error && resendResponse?.data) {
-        return {
-            sent: true,
-            transport: "resend",
-            emailId: resendResponse.data.id,
-        };
-    }
-
-    const reason = resendResponse?.error?.message || "Resend email delivery failed";
-    console.warn("[CollabX Resend Failure]", reason);
-    return { sent: false, reason };
-};
-
-/**
  * Nodemailer SMTP Driver with short timeouts for cloud host compatibility
  */
+const resolveSmtpHost = (user) => {
+    const explicitHost = process.env.SMTP_HOST?.trim();
+    if (explicitHost) return explicitHost;
+    const normalizedUser = String(user || "").trim().toLowerCase();
+    if (normalizedUser.endsWith("@gmail.com") || normalizedUser.endsWith("@googlemail.com")) {
+        return "smtp.gmail.com";
+    }
+    return "";
+};
+
 const getSmtpTransporter = () => {
-    const host = process.env.SMTP_HOST?.trim();
-    const port = Number(process.env.SMTP_PORT) || 587;
     const user = process.env.SMTP_USER?.trim();
     const pass = process.env.SMTP_PASS?.trim();
-    const secure = process.env.SMTP_SECURE === "true" || port === 465;
+    const host = resolveSmtpHost(user);
+    const port = Number(process.env.SMTP_PORT) || 587;
+    const secure = port === 465 ? true : port === 587 ? false : process.env.SMTP_SECURE === "true";
 
     const currentConfigKey = `${host}:${port}:${user}:${secure}`;
     if (cachedTransporter && lastSmtpConfig === currentConfigKey) {
@@ -284,7 +129,7 @@ const getSmtpTransporter = () => {
 
 const sendViaSmtp = async ({ to, subject, html, text, bcc }) => {
     const transporter = getSmtpTransporter();
-    const from = (process.env.EMAIL_FROM || process.env.MAIL_FROM || "CollabX <noreply@technonjr.org>").trim();
+    const from = (process.env.EMAIL_FROM || process.env.MAIL_FROM || "CollabX Techno NJR <noreply@technonjr.org>").trim();
     const plainText = text || (html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "");
 
     const toEmails = normalizeRecipients(to);
@@ -369,53 +214,38 @@ const renderEmailShell = ({
 `;
 
 /**
-- Universal core email sender.
-- Tries Resend API first if RESEND_API_KEY / EMAIL_API_KEY is set.
-- Otherwise uses SMTP if SMTP_HOST & SMTP_USER & SMTP_PASS are set.
-- If neither is configured, logs non-blocking dev notice and returns gracefully.
+ * Universal core email sender using Nodemailer SMTP.
+ * If SMTP is not configured, logs non-blocking dev notice and returns gracefully.
  */
 export const sendEmail = async ({ to, subject, html, text, bcc }) => {
     try {
-        const brevoKey = (process.env.BREVO_API_KEY || process.env.BREVO_KEY || process.env.SENDINBLUE_API_KEY)?.trim();
-        const resendKey = (process.env.RESEND_API_KEY || process.env.EMAIL_API_KEY)?.trim();
+        const smtpUser = process.env.SMTP_USER?.trim();
         const hasSmtp = Boolean(
-            process.env.SMTP_HOST?.trim() &&
-            process.env.SMTP_USER?.trim() &&
+            resolveSmtpHost(smtpUser) &&
+            smtpUser &&
             process.env.SMTP_PASS?.trim()
         );
 
-        // 1. Primary: Brevo REST API (POST https://api.brevo.com/v3/smtp/email)
-        if (brevoKey) {
-            return await sendViaBrevo({ apiKey: brevoKey, to, subject, html, text, bcc });
-        }
-
-        // 2. Secondary: Resend REST API (POST https://api.resend.com/emails)
-        if (resendKey) {
-            return await sendViaResend({ apiKey: resendKey, to, subject, html, text, bcc });
-        }
-
-        // 3. Tertiary: Nodemailer SMTP with short timeouts
         if (hasSmtp) {
             return await sendViaSmtp({ to, subject, html, text, bcc });
         }
 
-        // Universal Fallback: Gracefully report unconfigured transport
         if (process.env.NODE_ENV !== "production") {
             const recipients = Array.isArray(to) ? to.join(", ") : to || (Array.isArray(bcc) ? bcc.join(", ") : bcc);
-            console.log(`[CollabX Dev Mailer] (No Brevo/Resend/SMTP configured) Recipient: ${recipients} | Subject: "${subject}"`);
+            console.log(`[CollabX Dev Mailer] (No SMTP configured) Recipient: ${recipients} | Subject: "${subject}"`);
         }
         return {
             sent: false,
-            reason: "No email transport configured in environment (set BREVO_API_KEY, RESEND_API_KEY, or SMTP_*)",
+            reason: "No SMTP transport configured in environment (set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS)",
         };
     } catch (err) {
-        console.warn("[CollabX Universal Mailer Exception]", err.message);
+        console.warn("[CollabX SMTP Mailer Exception]", err.message);
         return { sent: false, reason: err.message };
     }
 };
 
 /**
-- 1. OTP Verification Email (Signup, Password Reset, Email Verification)
+ * 1. OTP Verification Email (Signup, Password Reset, Email Verification)
  */
 export const sendOtpEmail = async ({ to, name = "CollabX User", otp, purpose = "signup" }) => {
     try {
@@ -473,7 +303,7 @@ export const sendOtpEmail = async ({ to, name = "CollabX User", otp, purpose = "
 };
 
 /**
-- 2. Welcome Email on Account Creation
+ * 2. Welcome Email on Account Creation
  */
 export const sendWelcomeEmail = async ({ to, name = "CollabX User", role = "student" }) => {
     try {
@@ -525,7 +355,7 @@ export const sendWelcomeEmail = async ({ to, name = "CollabX User", role = "stud
 };
 
 /**
-- 3. Account Approved & Activated Email (Sent after Admin reviews & classifies account)
+ * 3. Account Approved & Activated Email (Sent after Admin reviews & classifies account)
  */
 export const sendAccountApprovalEmail = async ({ to, name = "CollabX User", role = "student" }) => {
     try {
@@ -579,9 +409,9 @@ export const sendAccountApprovalEmail = async ({ to, name = "CollabX User", role
 };
 
 /**
-- 4. Announcement Email (Campus / Team Announcements)
-- Supports single email or an array of recipient emails.
-- When multiple recipients are specified, batches them safely via BCC so user emails are never disclosed.
+ * 4. Announcement Email (Campus / Team Announcements)
+ * Supports single email or an array of recipient emails.
+ * When multiple recipients are specified, batches them safely via BCC so user emails are never disclosed.
  */
 export const sendAnnouncementEmail = async ({
     to,
@@ -636,7 +466,6 @@ export const sendAnnouncementEmail = async ({
             badge: projectTitle ? "TEAM ANNOUNCEMENT" : "ANNOUNCEMENT",
         });
 
-        // If 'to' is an array of recipients, chunk into batches of 40 and use BCC for privacy
         if (Array.isArray(to)) {
             const rawList = to.map((e) => String(e).trim().toLowerCase()).filter(Boolean);
             const uniqueRecipients = [...new Set(rawList)];
@@ -669,7 +498,7 @@ export const sendAnnouncementEmail = async ({
 };
 
 /**
-- 5. General Notification Email
+ * 5. General Notification Email
  */
 export const sendNotificationEmail = async ({
     to,
@@ -707,7 +536,7 @@ export const sendNotificationEmail = async ({
 };
 
 /**
-- 6. Team & Mentor Invitation Email
+ * 6. Team & Mentor Invitation Email
  */
 export const sendInvitationEmail = async ({
     to,

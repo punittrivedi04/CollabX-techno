@@ -338,7 +338,7 @@ export default function Register() {
               to="/register"
               className="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl"
             >
-               <a aria-current="page" class="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl active" href="/dashboard" data-discover="true"><span>CollabX</span><span class="text-[#1E6B4B]">.</span></a>
+               <a aria-current="page" className="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl active" href="/dashboard" data-discover="true"><span>CollabX</span><span className="text-[#1E6B4B]">.</span></a>
   
             </Link>
 

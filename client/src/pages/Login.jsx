@@ -284,7 +284,7 @@ export default function Login() {
             aria-label="Primary"
             className="flex w-full items-center justify-between gap-3 rounded-2xl border border-black/10 bg-[#F8F8F6]/96 px-4 py-2.5 shadow-sm backdrop-blur-md sm:px-5"
           >
-         <a aria-current="page" class="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl active" href="/dashboard" data-discover="true"><span>CollabX</span><span class="text-[#1E6B4B]">.</span></a>
+         <a aria-current="page" className="inline-flex shrink-0 items-baseline px-1 py-1 text-lg font-extrabold tracking-tight text-[#141A18] transition-opacity hover:opacity-85 sm:text-xl active" href="/dashboard" data-discover="true"><span>CollabX</span><span className="text-[#1E6B4B]">.</span></a>
 
             <div className="inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-2.5 py-1">
               <img
