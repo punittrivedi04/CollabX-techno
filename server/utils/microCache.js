@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 /**
  * Ultra-lean bounded LRU + TTL in-memory cache with in-flight request coalescing.
  * Designed for shared hosts with strict 256MB V8 heap limits handling 2,000+ concurrent users.
@@ -97,8 +99,18 @@ export const aggregateCache = new MicroCache({ maxEntries: 200, ttlMs: 8000 });
 export const userAuthCache = new MicroCache({ maxEntries: 500, ttlMs: 5000 });
 export const projectAccessCache = new MicroCache({ maxEntries: 500, ttlMs: 5000 });
 
-// Bounded per-user token revocation timestamps (invalidates existing 15m access tokens on password reset / token reuse)
+// Bounded per-user token revocation timestamps (invalidates existing 15m access tokens on logout / password reset / token reuse)
 export const tokenRevocationCache = new MicroCache({ maxEntries: 1000, ttlMs: 20 * 60 * 1000 });
+// Bounded per-token denylist (for immediate invalidation of specific logged-out Bearer JWTs)
+export const revokedAccessTokenCache = new MicroCache({ maxEntries: 2000, ttlMs: 20 * 60 * 1000 });
+
+const hashAccessToken = (token) =>
+    crypto.createHash("sha256").update(String(token)).digest("hex");
+
+export const revokeAccessToken = (rawToken) => {
+    if (!rawToken || typeof rawToken !== "string") return;
+    revokedAccessTokenCache.set(hashAccessToken(rawToken.trim()), true, 20 * 60 * 1000);
+};
 
 export const revokeUserTokens = (userId) => {
     const idKey = String(userId);
@@ -112,7 +124,10 @@ export const getTokenRevocationTime = (userId) => {
     return tokenRevocationCache.get(String(userId)) || 0;
 };
 
-export const isTokenRevoked = (userId, decodedToken) => {
+export const isTokenRevoked = (userId, decodedToken, rawToken = null) => {
+    if (rawToken && revokedAccessTokenCache.get(hashAccessToken(rawToken))) {
+        return true;
+    }
     const revokedAt = tokenRevocationCache.get(String(userId));
     if (!revokedAt) return false;
     const issuedAtMs =
@@ -121,7 +136,7 @@ export const isTokenRevoked = (userId, decodedToken) => {
             : typeof decodedToken?.iat === "number"
                 ? decodedToken.iat * 1000
                 : 0;
-    return issuedAtMs < revokedAt;
+    return issuedAtMs <= revokedAt;
 };
 
 export const invalidateAllCaches = () => {

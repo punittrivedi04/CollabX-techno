@@ -15,6 +15,7 @@ import {
 
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import { isValidHttpUrl } from "../utils/portalHelpers";
 
 const getId = (value) => {
   if (!value) return null;
@@ -597,10 +598,9 @@ export default function Dashboard() {
                             {displayStatus}
                           </span>
 
-                          {typeof project?.demoUrl === "string" &&
-                            project.demoUrl.trim().length > 0 && (
+                          {isValidHttpUrl(project?.demoUrl) && (
                               <a
-                                href={project.demoUrl}
+                                href={project.demoUrl.trim()}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 rounded-full border border-[#2A3321] bg-[#121412] px-3 py-1 text-[11px] font-bold text-[#A3E635] transition-all duration-200 hover:cursor-pointer hover:bg-[#1F5E3B] hover:text-white group-hover:bg-[#1F5E3B] group-hover:text-white dark:border-[#2A3321] dark:bg-[#121412] dark:text-[#A3E635] dark:hover:bg-[#1F5E3B] dark:hover:text-white dark:group-hover:bg-[#1F5E3B] dark:group-hover:text-white"

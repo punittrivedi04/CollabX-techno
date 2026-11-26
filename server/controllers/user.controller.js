@@ -93,12 +93,27 @@ export const updateUserProfile = async (req, res, next) => {
                                 : "Roll number must be alphanumeric (uppercase letters and numbers only)",
                         });
                     }
-                    if (cleanRoll.length > 50) {
+                    if (cleanRoll.length < 3 || cleanRoll.length > 50) {
                         return res.status(400).json({
                             success: false,
                             message: isMentorUser
-                                ? "Enrollment number cannot exceed 50 characters"
-                                : "Roll number cannot exceed 50 characters",
+                                ? "Enrollment number must be 3 to 50 alphanumeric characters"
+                                : "Roll number must be 3 to 50 alphanumeric characters",
+                        });
+                    }
+                    const rollCheck = await pool.query(
+                        `SELECT id FROM users
+                         WHERE UPPER(roll_no) = UPPER($1)
+                           AND id != $2
+                           AND (is_verified = TRUE OR is_active = TRUE)
+                         LIMIT 1;`,
+                        [cleanRoll, userId]
+                    );
+                    if (rollCheck.rows.length > 0) {
+                        return res.status(409).json({
+                            success: false,
+                            code: "ROLL_NO_EXISTS",
+                            message: "This Roll Number / Enrollment ID is already registered to another account.",
                         });
                     }
                     newRollNo = cleanRoll;
@@ -134,7 +149,11 @@ export const updateUserProfile = async (req, res, next) => {
 export const getUsers = async (req, res, next) => {
     try {
         const { search, role } = req.query;
-        const conditions = ["COALESCE(is_active, TRUE) = TRUE", "LOWER(COALESCE(role, '')) != 'director'"];
+        const conditions = [
+            "is_active = TRUE",
+            "COALESCE(is_verified, TRUE) = TRUE",
+            "LOWER(COALESCE(role, '')) != 'director'",
+        ];
         const params = [];
 
         if (typeof role === "string" && role.trim()) {

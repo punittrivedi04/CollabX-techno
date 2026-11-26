@@ -374,8 +374,7 @@ export const sendInvitation = async (req, res, next) => {
 
             invalidateAllCaches();
 
-            const baseUrl = process.env.CLIENT_URL || req.get("origin") || "http://localhost:5173";
-            const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+            const cleanBaseUrl = getBaseClientUrl(req);
             const invitationUrl = `${cleanBaseUrl}/team?invite=${token}`;
 
             // Non-blocking mentor invitation email delivery

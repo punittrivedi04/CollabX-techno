@@ -138,6 +138,17 @@ export function AuthProvider({ children }) {
 
   // Logout
   const logout = () => {
+    const token = localStorage.getItem("collabx_token");
+    if (token) {
+      api
+        .post(
+          "/auth/logout",
+          {},
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        .catch(() => {});
+    }
+
     disconnectSocket();
 
     localStorage.removeItem("collabx_token");

@@ -50,7 +50,7 @@ import {
 import { getDirectorStudents, getDirectorStudentById } from "./controllers/director.controller.js";
 import { getAdminStudents, getAdminStudentById } from "./controllers/admin.controller.js";
 import { getMentorStudents, getMentorStudentById } from "./controllers/mentor.controller.js";
-import protect from "./middleware/auth.middleware.js";
+import protect, { authorize } from "./middleware/auth.middleware.js";
 import { isDirector, blockDirectorMutations } from "./middleware/directorGuard.js";
 import { parsePositiveInt } from "./utils/formatters.js";
 
@@ -75,8 +75,15 @@ const CLIENT_URL = process.env.CLIENT_URL;
 const DEBUG_SOCKETS = process.env.DEBUG_SOCKETS === "true";
 
 export const parseAllowedOrigins = (rawUrl) => {
-    const fallback = ["http://localhost:5173", "http://127.0.0.1:5173"];
-    if (!rawUrl || typeof rawUrl !== "string") return fallback;
+    const isProd = process.env.NODE_ENV === "production";
+    const devFallback = ["http://localhost:5173", "http://127.0.0.1:5173"];
+    const isLocalhostOrigin = (origin) =>
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+
+    if (!rawUrl || typeof rawUrl !== "string") {
+        return isProd ? [] : devFallback;
+    }
+
     const origins = rawUrl
         .split(",")
         .map((origin) => origin.trim())
@@ -88,8 +95,10 @@ export const parseAllowedOrigins = (rawUrl) => {
                 return origin.replace(/\/+$/, "");
             }
         })
-        .filter(Boolean);
-    return origins.length > 0 ? origins : fallback;
+        .filter((origin) => Boolean(origin) && (!isProd || !isLocalhostOrigin(origin)));
+
+    if (origins.length > 0) return origins;
+    return isProd ? [] : devFallback;
 };
 
 let allowedOrigins = parseAllowedOrigins(process.env.CLIENT_URL);
@@ -147,7 +156,7 @@ io.use(async (socket, next) => {
             return next(new Error("Invalid authentication token"));
         }
 
-        if (isTokenRevoked(parsedUserId, decoded)) {
+        if (isTokenRevoked(parsedUserId, decoded, token)) {
             return next(new Error("Session has been invalidated. Please login again."));
         }
 
@@ -159,8 +168,8 @@ io.use(async (socket, next) => {
             return rows[0] || null;
         });
 
-        if (!user || user.is_active === false) {
-            return next(new Error("User account not found"));
+        if (!user || user.is_verified === false || user.is_active === false) {
+            return next(new Error("User account not found or inactive"));
         }
 
         socket.data.user = {
@@ -267,19 +276,27 @@ app.use("/api/mentor", mentorRoutes);
 app.use("/api/director", directorRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
 
-// Direct /api/students and /api/student dispatcher based on role
-app.get(["/api/students", "/api/student"], protect, (req, res, next) => {
+// Direct /api/students and /api/student dispatcher based strictly on privileged role
+app.get(["/api/students", "/api/student"], protect, authorize("admin", "director", "mentor"), (req, res, next) => {
     const role = (req.user?.role || "").toLowerCase().trim();
     if (role === "director") return getDirectorStudents(req, res, next);
     if (role === "mentor" || role === "faculty") return getMentorStudents(req, res, next);
-    return getAdminStudents(req, res, next);
+    if (role === "admin" || role === "coordinator") return getAdminStudents(req, res, next);
+    return res.status(403).json({
+        success: false,
+        message: "Access denied. You do not have permission to access student records.",
+    });
 });
 
-app.get(["/api/students/:id", "/api/student/:id"], protect, (req, res, next) => {
+app.get(["/api/students/:id", "/api/student/:id"], protect, authorize("admin", "director", "mentor"), (req, res, next) => {
     const role = (req.user?.role || "").toLowerCase().trim();
     if (role === "director") return getDirectorStudentById(req, res, next);
     if (role === "mentor" || role === "faculty") return getMentorStudentById(req, res, next);
-    return getAdminStudentById(req, res, next);
+    if (role === "admin" || role === "coordinator") return getAdminStudentById(req, res, next);
+    return res.status(403).json({
+        success: false,
+        message: "Access denied. You do not have permission to access student records.",
+    });
 });
 
 // Direct profile endpoints
@@ -357,7 +374,7 @@ io.on("connection", (socket) => {
             );
             return rows[0] || null;
         });
-        if (!fresh || fresh.is_active === false) return null;
+        if (!fresh || fresh.is_verified === false || fresh.is_active === false) return null;
         const normalized = {
             id: fresh.id.toString(),
             _id: fresh.id.toString(),

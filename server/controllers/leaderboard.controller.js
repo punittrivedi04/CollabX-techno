@@ -612,7 +612,7 @@ export const getProjectStarsBreakdown = async (req, res, next) => {
 
         // Verify project exists
         const { rows: projRows } = await pool.query(
-            "SELECT id, title, is_on_leaderboard FROM projects WHERE id = $1;",
+            "SELECT id, title, status, owner_id, mentor_id, is_on_leaderboard FROM projects WHERE id = $1;",
             [projectId]
         );
 
@@ -621,6 +621,31 @@ export const getProjectStarsBreakdown = async (req, res, next) => {
         }
 
         const project = projRows[0];
+        const callerRole = String(req.user?.role || "").toLowerCase().trim();
+        const isOversight = callerRole === "admin" || callerRole === "coordinator" || callerRole === "director" || isDirector(req.user);
+
+        if (!isOversight && project.status === "Archived") {
+            return res.status(404).json({ success: false, message: "Project not found" });
+        }
+
+        if (!project.is_on_leaderboard && !isOversight) {
+            const isOwner = currentUserId && Number(project.owner_id) === currentUserId;
+            const isMentor = currentUserId && Number(project.mentor_id) === currentUserId;
+            let isMember = false;
+            if (!isOwner && !isMentor && currentUserId) {
+                const memRes = await pool.query(
+                    "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
+                    [projectId, currentUserId]
+                );
+                isMember = memRes.rows.length > 0;
+            }
+            if (!isOwner && !isMentor && !isMember) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You do not have access to this project's star breakdown",
+                });
+            }
+        }
 
         // Fetch all voters from project_stars joined with users
         const { rows: voters } = await pool.query(

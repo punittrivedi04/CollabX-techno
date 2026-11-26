@@ -8,6 +8,7 @@ import {
     MicroCache,
     invalidateUserCache,
     revokeUserTokens,
+    revokeAccessToken,
     getTokenRevocationTime,
 } from "../utils/microCache.js";
 
@@ -20,7 +21,9 @@ const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
 const loginAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: LOGIN_LOCKOUT_MS });
 
 const MAX_OTP_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const otpAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: 5 * 60 * 1000 });
+const otpResendCooldownCache = new MicroCache({ maxEntries: 2000, ttlMs: OTP_RESEND_COOLDOWN_MS });
 const consumedOtpTokens = new MicroCache({ maxEntries: 2000, ttlMs: 3 * 60 * 1000 });
 const recentLoginNotifsCache = new MicroCache({ maxEntries: 2000, ttlMs: 6 * 60 * 60 * 1000 });
 
@@ -359,6 +362,48 @@ export const registerUser = async (req, res, next) => {
             });
         }
 
+        if (cleanRollNo.length < 3 || cleanRollNo.length > 50 || !/^[A-Z0-9]+$/.test(cleanRollNo)) {
+            return res.status(400).json({
+                success: false,
+                message: "Roll number / Faculty ID must be 3 to 50 alphanumeric characters",
+            });
+        }
+
+        const currentUserId = existingCheck.rows[0]?.id || null;
+        const rollConflictRes = await pool.query(
+            `SELECT id, is_verified, is_active, created_at
+             FROM users
+             WHERE UPPER(roll_no) = UPPER($1)
+               AND ($2::int IS NULL OR id != $2);`,
+            [cleanRollNo, currentUserId]
+        );
+
+        if (rollConflictRes.rows.length > 0) {
+            const staleCutoffMs = Date.now() - 15 * 60 * 1000;
+            const activeClaim = rollConflictRes.rows.find(
+                (r) =>
+                    r.is_verified ||
+                    r.is_active ||
+                    (r.created_at && new Date(r.created_at).getTime() > staleCutoffMs)
+            );
+            if (activeClaim) {
+                return res.status(409).json({
+                    success: false,
+                    code: "ROLL_NO_EXISTS",
+                    message: "This Roll Number / Faculty ID is already registered to another account.",
+                });
+            }
+            // Release roll_no held by abandoned unverified registrations (>15m old)
+            await pool.query(
+                `UPDATE users SET roll_no = NULL
+                 WHERE UPPER(roll_no) = UPPER($1)
+                   AND is_verified = FALSE
+                   AND is_active = FALSE
+                   AND ($2::int IS NULL OR id != $2);`,
+                [cleanRollNo, currentUserId]
+            );
+        }
+
         // Check email domain: @technonjr.org vs external email
         const isTechnoNjr = cleanEmail.endsWith("@technonjr.org");
         let isNewPendingSignup = false;
@@ -429,6 +474,8 @@ export const registerUser = async (req, res, next) => {
                 email: cleanEmail,
             });
         }
+
+        otpResendCooldownCache.set(`signup:${cleanEmail}`, Date.now() + OTP_RESEND_COOLDOWN_MS);
 
         return res.status(200).json({
             success: true,
@@ -523,7 +570,17 @@ export const verifyOtp = async (req, res, next) => {
 
         const isMatch = await bcrypt.compare(cleanOtp, decoded.otpHash);
         if (!isMatch) {
-            otpAttemptsCache.set(tokenAttemptKey, prevOtpAttempts + 1);
+            const nextAttempts = prevOtpAttempts + 1;
+            if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+                consumedOtpTokens.set(tokenAttemptKey, true);
+                otpAttemptsCache.delete(tokenAttemptKey);
+                return res.status(429).json({
+                    success: false,
+                    code: "OTP_LOCKED",
+                    message: "Too many invalid OTP attempts. This verification code has been invalidated; please request a new code.",
+                });
+            }
+            otpAttemptsCache.set(tokenAttemptKey, nextAttempts);
             return res.status(400).json({
                 success: false,
                 code: "INVALID_OTP",
@@ -672,6 +729,19 @@ export const resendOtp = async (req, res, next) => {
 
         const safePurpose = VALID_OTP_PURPOSES.has(purpose) ? purpose : "signup";
         const cleanEmail = email.trim().toLowerCase();
+        const cooldownKey = `${safePurpose}:${cleanEmail}`;
+        const cooldownUntil = otpResendCooldownCache.get(cooldownKey);
+
+        if (cooldownUntil && cooldownUntil > Date.now()) {
+            const retryAfter = Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000));
+            res.setHeader("Retry-After", retryAfter);
+            return res.status(429).json({
+                success: false,
+                code: "OTP_RESEND_COOLDOWN",
+                retryAfter,
+                message: `Please wait ${retryAfter} seconds before requesting a new verification code.`,
+            });
+        }
 
         const { rows } = await pool.query(
             "SELECT id, name FROM users WHERE LOWER(email) = LOWER($1)",
@@ -714,6 +784,8 @@ export const resendOtp = async (req, res, next) => {
             });
         }
 
+        otpResendCooldownCache.set(cooldownKey, Date.now() + OTP_RESEND_COOLDOWN_MS);
+
         return res.status(200).json({
             success: true,
             message: "A new OTP code has been sent to your email. Valid for 2 minutes.",
@@ -740,6 +812,8 @@ export const forgotPassword = async (req, res, next) => {
         }
 
         const cleanEmail = email.trim().toLowerCase();
+        const uniformMessage =
+            "If an account exists for that email, a password reset OTP has been sent. Valid for 2 minutes.";
 
         const { rows } = await pool.query(
             "SELECT id, name FROM users WHERE LOWER(email) = LOWER($1)",
@@ -747,10 +821,19 @@ export const forgotPassword = async (req, res, next) => {
         );
 
         if (rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                code: "USER_NOT_FOUND",
-                message: "No account found with this email address. Please create an account first.",
+            // Equalize timing & response shape to prevent email enumeration
+            const dummySecret = crypto.randomBytes(16).toString("hex");
+            const dummyHash = await bcrypt.hash(dummySecret, 10);
+            const dummyOtpToken = jwt.sign(
+                { email: cleanEmail, otpHash: dummyHash, purpose: "reset_password" },
+                process.env.JWT_SECRET,
+                { expiresIn: "2m", algorithm: "HS256" }
+            );
+            return res.status(200).json({
+                success: true,
+                message: uniformMessage,
+                otpToken: dummyOtpToken,
+                email: cleanEmail,
             });
         }
 
@@ -782,9 +865,11 @@ export const forgotPassword = async (req, res, next) => {
             });
         }
 
+        otpResendCooldownCache.set(`reset_password:${cleanEmail}`, Date.now() + OTP_RESEND_COOLDOWN_MS);
+
         return res.status(200).json({
             success: true,
-            message: "Password reset OTP sent to your email. Valid for 2 minutes.",
+            message: uniformMessage,
             otpToken,
             email: cleanEmail,
         });
@@ -892,7 +977,17 @@ export const resetPassword = async (req, res, next) => {
 
         const isMatch = await bcrypt.compare(cleanOtp, decoded.otpHash);
         if (!isMatch) {
-            otpAttemptsCache.set(tokenAttemptKey, prevOtpAttempts + 1);
+            const nextAttempts = prevOtpAttempts + 1;
+            if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+                consumedOtpTokens.set(tokenAttemptKey, true);
+                otpAttemptsCache.delete(tokenAttemptKey);
+                return res.status(429).json({
+                    success: false,
+                    code: "OTP_LOCKED",
+                    message: "Too many invalid verification attempts. This reset code has been invalidated; please request a new code.",
+                });
+            }
+            otpAttemptsCache.set(tokenAttemptKey, nextAttempts);
             return res.status(400).json({
                 success: false,
                 code: "INVALID_OTP",
@@ -1045,6 +1140,27 @@ export const refreshTokenHandler = async (req, res, next) => {
 export const logoutUser = async (req, res, next) => {
     try {
         let userId = parsePositiveInt(req.user?.id);
+        const authHeader = req.headers?.authorization;
+        const bearerToken =
+            authHeader && typeof authHeader === "string" && authHeader.startsWith("Bearer ")
+                ? authHeader.slice(7).trim()
+                : null;
+
+        if (bearerToken && process.env.JWT_SECRET) {
+            try {
+                const decodedAccess = jwt.verify(bearerToken, process.env.JWT_SECRET, {
+                    algorithms: ["HS256"],
+                });
+                revokeAccessToken(bearerToken);
+                if (!userId && decodedAccess?.type !== "refresh") {
+                    userId = parsePositiveInt(decodedAccess?.id);
+                }
+            } catch {
+                // Still revoke any presented token string and ignore expired/invalid access token
+                revokeAccessToken(bearerToken);
+            }
+        }
+
         if (!userId) {
             const rawRefreshToken =
                 req.cookies?.refreshToken ||
@@ -1061,12 +1177,18 @@ export const logoutUser = async (req, res, next) => {
                 }
             }
         }
+
         if (userId) {
             await pool.query(
                 "UPDATE users SET refresh_token_hash = NULL WHERE id = $1",
                 [userId]
             );
+            revokeUserTokens(userId);
             invalidateUserCache();
+            const io = req.app.get("io");
+            if (io) {
+                io.in(`user:${userId}`).disconnectSockets(true);
+            }
         }
 
         res.clearCookie("refreshToken", {

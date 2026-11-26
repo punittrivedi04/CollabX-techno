@@ -32,6 +32,7 @@ import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import ErrorBoundary from "../components/ErrorBoundary";
 import SearchableSelect from "../components/portal/SearchableSelect";
+import { isValidHttpUrl } from "../utils/portalHelpers";
 
 const hasProjectDeliverables = (project) => {
   if (!project) return false;
@@ -1066,10 +1067,9 @@ export default function Projects() {
                     {/* Project Deliverables / Links Section */}
                     <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-[#E4ECE6] dark:border-[#1F2C26] pt-4">
                       <div className="flex flex-wrap items-center gap-2">
-                        {typeof project?.githubUrl === "string" &&
-                          project.githubUrl.trim().length > 0 && (
+                        {isValidHttpUrl(project?.githubUrl) && (
                             <a
-                              href={project.githubUrl}
+                              href={project.githubUrl.trim()}
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
@@ -1081,10 +1081,9 @@ export default function Projects() {
                             </a>
                           )}
 
-                        {typeof project?.demoUrl === "string" &&
-                          project.demoUrl.trim().length > 0 && (
+                        {isValidHttpUrl(project?.demoUrl) && (
                             <a
-                              href={project.demoUrl}
+                              href={project.demoUrl.trim()}
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
@@ -1096,10 +1095,9 @@ export default function Projects() {
                             </a>
                           )}
 
-                        {typeof project?.pptUrl === "string" &&
-                          project.pptUrl.trim().length > 0 && (
+                        {isValidHttpUrl(project?.pptUrl) && (
                             <a
-                              href={project.pptUrl}
+                              href={project.pptUrl.trim()}
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
@@ -1850,10 +1848,9 @@ export default function Projects() {
                       Project Deliverables &amp; Links
                     </span>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {typeof selectedProjectDetails.githubUrl === "string" &&
-                        selectedProjectDetails.githubUrl.trim().length > 0 && (
+                      {isValidHttpUrl(selectedProjectDetails.githubUrl) && (
                           <a
-                            href={selectedProjectDetails.githubUrl}
+                            href={selectedProjectDetails.githubUrl.trim()}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"
@@ -1863,10 +1860,9 @@ export default function Projects() {
                           </a>
                         )}
 
-                      {typeof selectedProjectDetails.demoUrl === "string" &&
-                        selectedProjectDetails.demoUrl.trim().length > 0 && (
+                      {isValidHttpUrl(selectedProjectDetails.demoUrl) && (
                           <a
-                            href={selectedProjectDetails.demoUrl}
+                            href={selectedProjectDetails.demoUrl.trim()}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"
@@ -1876,10 +1872,9 @@ export default function Projects() {
                           </a>
                         )}
 
-                      {typeof selectedProjectDetails.pptUrl === "string" &&
-                        selectedProjectDetails.pptUrl.trim().length > 0 && (
+                      {isValidHttpUrl(selectedProjectDetails.pptUrl) && (
                           <a
-                            href={selectedProjectDetails.pptUrl}
+                            href={selectedProjectDetails.pptUrl.trim()}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1.5 rounded-full border border-[#1E2422]/25 bg-white text-[#141A18] transition-all duration-200 hover:border-[#1E6B4B] hover:bg-[#1E6B4B] hover:text-white dark:border-[#2A3B32] dark:bg-[#121A16] dark:text-slate-200 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-3.5 py-1.5 text-xs font-bold"

@@ -77,7 +77,7 @@ const protect = async (req, res, next) => {
             });
         }
 
-        if (isTokenRevoked(userId, decoded)) {
+        if (isTokenRevoked(userId, decoded, token)) {
             return res.status(401).json({
                 success: false,
                 message: "Session has been invalidated. Please login again.",
