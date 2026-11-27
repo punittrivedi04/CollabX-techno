@@ -20,6 +20,8 @@ import logActivity from "../utils/activityLogger.js";
 import { sendAccountApprovalEmail, sendAnnouncementEmail } from "../utils/sendEmail.js";
 import { purgeProjectAndDependents } from "../utils/projectCleanup.js";
 
+const ALLOWED_ADMIN_STUDENT_STATUSES = new Set(["all", "active", "inactive", "unclassified"]);
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^[0-9+\-\s()]{5,30}$/;
 const ALLOWED_ANNOUNCEMENT_ROLES = new Set(["all", "student", "mentor"]);
@@ -422,9 +424,16 @@ export const getAdminStudents = async (req, res, next) => {
         const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
         const mentorId = req.query.mentorId ? parsePositiveInt(req.query.mentorId) : null;
         const teamId = req.query.teamId || req.query.projectId ? parsePositiveInt(req.query.teamId || req.query.projectId) : null;
-        const statusFilter = String(req.query.status || "all").toLowerCase().trim();
+        const rawStatus = req.query.status !== undefined ? String(req.query.status).toLowerCase().trim() : "all";
+        if (!ALLOWED_ADMIN_STUDENT_STATUSES.has(rawStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid status filter. Allowed values: all, active, inactive, unclassified.",
+            });
+        }
+        const statusFilter = rawStatus;
         const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
-        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
         const offset = (page - 1) * limit;
 
         if (req.query.mentorId && !mentorId) {
@@ -437,7 +446,7 @@ export const getAdminStudents = async (req, res, next) => {
         const cacheKey = `admin:students:u:${req.user.id}:q:${search}:m:${mentorId || ""}:t:${teamId || ""}:s:${statusFilter}:p:${page}:l:${limit}`;
         const result = await readCache.getOrSet(cacheKey, async () => {
             const conditions = [
-                "LOWER(COALESCE(u.role, 'student')) = 'student'",
+                "LOWER(TRIM(COALESCE(u.role, 'student'))) = 'student'",
             ];
             const params = [];
 
@@ -470,15 +479,14 @@ export const getAdminStudents = async (req, res, next) => {
                 )`);
             }
 
-            // Admin student lists and approval queues only return verified accounts
-            conditions.push("u.is_verified = TRUE");
-
+            // Sync visibility across All / Active / Inactive with Director Portal,
+            // while keeping Unclassified approval queues strictly verified-only.
             if (statusFilter === "active") {
                 conditions.push("u.is_active = TRUE");
             } else if (statusFilter === "inactive") {
-                conditions.push("u.is_active = FALSE");
+                conditions.push("(u.is_active = FALSE OR u.is_active IS NULL)");
             } else if (statusFilter === "unclassified") {
-                conditions.push("u.is_active = FALSE AND COALESCE(u.role_classified, FALSE) = FALSE");
+                conditions.push("u.is_verified = TRUE AND (u.is_active = FALSE OR u.is_active IS NULL) AND COALESCE(u.role_classified, FALSE) = FALSE");
             }
 
             const whereClause = conditions.join(" AND ");
@@ -634,13 +642,14 @@ export const getAdminStudents = async (req, res, next) => {
         return res.status(200).json({
             success: true,
             count: result.students.length,
+            totalMatching: result.total,
             students: result.students,
             data: result.students,
             pagination: {
                 total: result.total,
                 page: result.page,
                 limit: result.limit,
-                totalPages: Math.ceil(result.total / result.limit),
+                totalPages: Math.ceil(result.total / result.limit) || 1,
             },
         });
     } catch (error) {
@@ -2585,6 +2594,113 @@ export const getAdminUsers = async (req, res, next) => {
 };
 
 /**
+ * Shared FK-safe transactional user deletion helper (used by deleteAdminUser and cleanupDummyTestAccounts).
+ */
+const deleteUserSafelyInTransaction = async (client, targetUser, adminUser, auditAction = "ADMIN_USER_DELETED") => {
+    const targetUserId = targetUser.id;
+    const adminId = Number(adminUser.id);
+
+    // 1. Reassign or archive projects owned by target user
+    const { rows: ownedProjects } = await client.query(
+        "SELECT id, title FROM projects WHERE owner_id = $1;",
+        [targetUserId]
+    );
+
+    for (const proj of ownedProjects) {
+        const { rows: candidateMembers } = await client.query(
+            "SELECT user_id FROM project_members WHERE project_id = $1 AND user_id != $2 ORDER BY user_id ASC LIMIT 1;",
+            [proj.id, targetUserId]
+        );
+
+        if (candidateMembers.length > 0) {
+            const newOwnerId = candidateMembers[0].user_id;
+            await client.query(
+                "UPDATE projects SET owner_id = $1, updated_at = NOW() WHERE id = $2;",
+                [newOwnerId, proj.id]
+            );
+            await client.query(
+                "UPDATE project_members SET role = 'leader' WHERE project_id = $1 AND user_id = $2;",
+                [proj.id, newOwnerId]
+            );
+        } else {
+            await client.query(
+                "UPDATE projects SET status = 'Archived', owner_id = NULL, is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW() WHERE id = $1;",
+                [proj.id]
+            );
+            await client.query("DELETE FROM project_stars WHERE project_id = $1;", [proj.id]);
+        }
+    }
+
+    // 2. Clear mentor assignments from projects and students
+    await client.query(
+        "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE mentor_id = $1;",
+        [targetUserId]
+    );
+    await client.query(
+        "UPDATE users SET mentor_id = NULL WHERE mentor_id = $1;",
+        [targetUserId]
+    );
+
+    // 3. Unassign tasks assigned to or created by target user
+    await client.query(
+        "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE assigned_to = $1;",
+        [targetUserId]
+    );
+    await client.query(
+        "UPDATE tasks SET created_by = NULL, updated_at = NOW() WHERE created_by = $1;",
+        [targetUserId]
+    );
+
+    // 4. Clean invitations referencing target user
+    await client.query(
+        "DELETE FROM invitations WHERE recipient_id = $1 OR sender_id = $1 OR recipient_email = $2;",
+        [targetUserId, targetUser.email]
+    );
+
+    // 5. Clean team memberships, stars, notifications, messages, announcements
+    await client.query("DELETE FROM project_members WHERE user_id = $1;", [targetUserId]);
+    await client.query(`
+        UPDATE projects
+        SET status = 'Archived', is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW()
+        WHERE owner_id IS NULL
+          AND status != 'Archived'
+          AND id NOT IN (SELECT project_id FROM project_members);
+    `);
+    await client.query(`
+        DELETE FROM project_stars
+        WHERE project_id IN (
+            SELECT id FROM projects WHERE status = 'Archived' OR is_on_leaderboard = FALSE
+        );
+    `);
+    await client.query("DELETE FROM project_stars WHERE user_id = $1;", [targetUserId]);
+    await client.query("DELETE FROM notifications WHERE user_id = $1;", [targetUserId]);
+    await client.query("DELETE FROM messages WHERE sender_id = $1;", [targetUserId]);
+    await client.query("UPDATE announcements SET created_by = NULL WHERE created_by = $1;", [targetUserId]);
+
+    // 6. Delete the user record
+    await client.query("DELETE FROM users WHERE id = $1;", [targetUserId]);
+
+    // 7. Structured audit logging (zero sensitive secrets logged)
+    await logActivity({
+        projectId: null,
+        userId: adminId,
+        action: auditAction,
+        description: `Administrator ${adminUser.name} deleted user "${targetUser.name}" (${targetUser.email}, Role: ${targetUser.role}, ID: ${targetUserId})`,
+        entityType: "User",
+        entityId: targetUserId,
+        metadata: {
+            adminId,
+            targetUserId,
+            targetRole: targetUser.role,
+            targetEmail: targetUser.email,
+            targetName: targetUser.name,
+            deletedAt: new Date().toISOString(),
+        },
+        client,
+    });
+};
+
+/**
  * DELETE /api/admin/users/:id
  * Hardened Admin User Deletion (Students, Mentors, Directors, etc.)
  * Strictly transactional with foreign key cleanup, self-lockout prevention, and audit logging.
@@ -2626,111 +2742,16 @@ export const deleteAdminUser = async (req, res, next) => {
         const targetUser = userRows[0];
 
         await client.query("BEGIN");
-
-        // 1. Reassign or archive projects owned by target user
-        const { rows: ownedProjects } = await client.query(
-            "SELECT id, title FROM projects WHERE owner_id = $1;",
-            [targetUserId]
-        );
-
-        for (const proj of ownedProjects) {
-            const { rows: candidateMembers } = await client.query(
-                "SELECT user_id FROM project_members WHERE project_id = $1 AND user_id != $2 ORDER BY user_id ASC LIMIT 1;",
-                [proj.id, targetUserId]
-            );
-
-            if (candidateMembers.length > 0) {
-                const newOwnerId = candidateMembers[0].user_id;
-                await client.query(
-                    "UPDATE projects SET owner_id = $1, updated_at = NOW() WHERE id = $2;",
-                    [newOwnerId, proj.id]
-                );
-                await client.query(
-                    "UPDATE project_members SET role = 'leader' WHERE project_id = $1 AND user_id = $2;",
-                    [proj.id, newOwnerId]
-                );
-            } else {
-                await client.query(
-                    "UPDATE projects SET status = 'Archived', owner_id = NULL, is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW() WHERE id = $1;",
-                    [proj.id]
-                );
-                await client.query("DELETE FROM project_stars WHERE project_id = $1;", [proj.id]);
-            }
-        }
-
-        // 2. Clear mentor assignments from projects and students
-        await client.query(
-            "UPDATE projects SET mentor_id = NULL, updated_at = NOW() WHERE mentor_id = $1;",
-            [targetUserId]
-        );
-        await client.query(
-            "UPDATE users SET mentor_id = NULL WHERE mentor_id = $1;",
-            [targetUserId]
-        );
-
-        // 3. Unassign tasks assigned to or created by target user
-        await client.query(
-            "UPDATE tasks SET assigned_to = NULL, updated_at = NOW() WHERE assigned_to = $1;",
-            [targetUserId]
-        );
-        await client.query(
-            "UPDATE tasks SET created_by = NULL, updated_at = NOW() WHERE created_by = $1;",
-            [targetUserId]
-        );
-
-        // 4. Clean invitations referencing target user
-        await client.query(
-            "DELETE FROM invitations WHERE recipient_id = $1 OR sender_id = $1 OR recipient_email = $2;",
-            [targetUserId, targetUser.email]
-        );
-
-        // 5. Clean team memberships, stars, notifications, messages, announcements
-        await client.query("DELETE FROM project_members WHERE user_id = $1;", [targetUserId]);
-        await client.query(`
-            UPDATE projects
-            SET status = 'Archived', is_on_leaderboard = FALSE, leaderboard_submitted_at = NULL, updated_at = NOW()
-            WHERE owner_id IS NULL
-              AND status != 'Archived'
-              AND id NOT IN (SELECT project_id FROM project_members);
-        `);
-        await client.query(`
-            DELETE FROM project_stars
-            WHERE project_id IN (
-                SELECT id FROM projects WHERE status = 'Archived' OR is_on_leaderboard = FALSE
-            );
-        `);
-        await client.query("DELETE FROM project_stars WHERE user_id = $1;", [targetUserId]);
-        await client.query("DELETE FROM notifications WHERE user_id = $1;", [targetUserId]);
-        await client.query("DELETE FROM messages WHERE sender_id = $1;", [targetUserId]);
-        await client.query("UPDATE announcements SET created_by = NULL WHERE created_by = $1;", [targetUserId]);
-
-        // 6. Delete the user record
-        await client.query("DELETE FROM users WHERE id = $1;", [targetUserId]);
-
-        // 7. Structured audit logging (zero sensitive secrets logged)
-        await logActivity({
-            projectId: null,
-            userId: adminId,
-            action: "ADMIN_USER_DELETED",
-            description: `Administrator ${req.user.name} deleted user "${targetUser.name}" (${targetUser.email}, Role: ${targetUser.role}, ID: ${targetUserId})`,
-            entityType: "User",
-            entityId: targetUserId,
-            metadata: {
-                adminId,
-                targetUserId,
-                targetRole: targetUser.role,
-                targetEmail: targetUser.email,
-                targetName: targetUser.name,
-                deletedAt: new Date().toISOString(),
-            },
-            client,
-        });
-
+        await deleteUserSafelyInTransaction(client, targetUser, req.user, "ADMIN_USER_DELETED");
         await client.query("COMMIT");
 
         // Revoke tokens and wipe micro-caches
         invalidateUserCache(targetUserId);
         revokeUserTokens(targetUserId);
+        const io = req.app.get("io");
+        if (io) {
+            io.in(`user:${targetUserId}`).disconnectSockets(true);
+        }
         invalidateAllCaches();
 
         return res.status(200).json({

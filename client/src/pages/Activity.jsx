@@ -4,7 +4,6 @@ import {
   Activity as ActivityIcon,
   FolderKanban,
   CheckSquare,
-  Users,
   Clock3,
   RefreshCw,
   ChevronLeft,
@@ -256,16 +255,6 @@ export default function Activity() {
     currentPage * LIMIT,
   );
 
-  const stats = useMemo(
-    () => ({
-      total: activities.length,
-      projects: activities.filter((a) => a.entityType === "Project").length,
-      tasks: activities.filter((a) => a.entityType === "Task").length,
-      team: activities.filter((a) => a.entityType === "Team").length,
-    }),
-    [activities],
-  );
-
   const changeFilter = (value) => {
     setFilter(value);
     setPage(1);
@@ -297,60 +286,6 @@ export default function Activity() {
           <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
           Refresh
         </button>
-      </div>
-
-      {/* Bento Stat Cards */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {[
-          {
-            label: "Total Activities",
-            value: stats.total,
-            Icon: ActivityIcon,
-            badge: "border border-[#D4DFD7] dark:border-[#24322B] bg-[#EFF4F0] dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
-            bg: "border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815]",
-          },
-          {
-            label: "Projects",
-            value: stats.projects,
-            Icon: FolderKanban,
-            badge: "border border-[#E2DFD5] dark:border-[#2D362B] bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
-            bg: "border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A]",
-          },
-          {
-            label: "Tasks",
-            value: stats.tasks,
-            Icon: CheckSquare,
-            badge: "border border-[#2E8B63]/25 bg-[#E3F3EB] dark:bg-[#13291E] text-[#1E6B4B] dark:text-[#6EE7B7]",
-            bg: "border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815]",
-          },
-          {
-            label: "Team",
-            value: stats.team,
-            Icon: Users,
-            badge: "border border-[#E2DFD5] dark:border-[#2D362B] bg-white dark:bg-[#0C120F] text-[#141A18] dark:text-slate-100",
-            bg: "border-[#DDDAD0] dark:border-[#2D362B] bg-[#F2F0E9] dark:bg-[#1B201A]",
-          },
-        ].map(({ label, value, Icon, badge, bg }) => (
-          <div
-            key={label}
-            className={`rounded-[28px] border ${bg} p-5 shadow-2xs`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-bold uppercase tracking-wider text-[#5C6B66] dark:text-[#94A89D]">
-                {label}
-              </p>
-              <div
-                className={`flex h-9 w-9 items-center justify-center rounded-full ${badge}`}
-              >
-                <Icon size={17} />
-              </div>
-            </div>
-
-            <p className="mt-3 text-3xl font-extrabold tracking-tight text-[#141A18] dark:text-slate-100">
-              {value}
-            </p>
-          </div>
-        ))}
       </div>
 
       {/* Activity Panel */}

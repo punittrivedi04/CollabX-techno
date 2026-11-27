@@ -51,6 +51,7 @@ export default function Profile() {
   const effectiveRole = getEffectiveRole(user);
   const isStudent = effectiveRole === "student";
   const isMentor = effectiveRole === "mentor";
+  const isDirector = effectiveRole === "director";
   const canEditEnrollment = isStudent || isMentor;
 
   const [name, setName] = useState("");
@@ -62,6 +63,7 @@ export default function Profile() {
 
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [workspaceSummary, setWorkspaceSummary] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -80,7 +82,7 @@ export default function Profile() {
         const [profileRes, projectRes, taskRes] = await Promise.allSettled([
           api.get("/users/profile"),
           api.get("/projects", { params: { limit: 50 } }),
-          api.get("/tasks"),
+          isDirector ? Promise.resolve({ data: { tasks: [] } }) : api.get("/tasks"),
         ]);
 
         if (!active) return;
@@ -91,6 +93,9 @@ export default function Profile() {
             profileRes.value.data.user ||
             profileRes.value.data.profile ||
             profileUser;
+          if (profileRes.value.data.workspaceSummary) {
+            setWorkspaceSummary(profileRes.value.data.workspaceSummary);
+          }
         }
 
         const loaded = {
@@ -136,9 +141,38 @@ export default function Profile() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isDirector]);
 
   const stats = useMemo(() => {
+    if (workspaceSummary) {
+      const totalProjects = Number(workspaceSummary.totalProjects) || 0;
+      const completedProjects = Number(workspaceSummary.completedProjects) || 0;
+      const activeProjects = Number(workspaceSummary.activeProjects) || 0;
+      const totalTasks = Number(workspaceSummary.totalTasks) || 0;
+      const completedTasks = Number(workspaceSummary.completedTasks) || 0;
+      const activeTasks = Number(workspaceSummary.activeTasks) || 0;
+      const rawRate = Number(
+        workspaceSummary.taskCompletionPercent ??
+          workspaceSummary.completionPercentage ??
+          workspaceSummary.taskCompletionRate ??
+          (totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0),
+      );
+      const taskCompletionRate = Math.min(
+        100,
+        Math.max(0, Number.isFinite(rawRate) ? rawRate : 0),
+      );
+
+      return {
+        totalProjects,
+        completedProjects,
+        activeProjects,
+        totalTasks,
+        completedTasks,
+        activeTasks,
+        taskCompletionRate,
+      };
+    }
+
     const totalProjects = projects.length;
     const completedProjects = projects.filter((p) => {
       const statusCompleted = ["completed", "done"].includes(String(p?.status || "").toLowerCase());
@@ -157,8 +191,12 @@ export default function Profile() {
       ["completed", "done"].includes(String(t?.status || "").toLowerCase()),
     ).length;
     const activeTasks = totalTasks - completedTasks;
-    const taskCompletionRate =
+    const rawRate =
       totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const taskCompletionRate = Math.min(
+      100,
+      Math.max(0, Number.isFinite(rawRate) ? rawRate : 0),
+    );
 
     return {
       totalProjects,
@@ -169,7 +207,7 @@ export default function Profile() {
       activeTasks,
       taskCompletionRate,
     };
-  }, [projects, tasks]);
+  }, [workspaceSummary, projects, tasks]);
 
   const handleSave = async (e) => {
     e.preventDefault();

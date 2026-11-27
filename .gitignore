@@ -1,10 +1,13 @@
 ﻿node_modules/
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 dist/
 build/
 .DS_Store
 *.dump
 *.bak
+*.sql
+!schema.sql
 *.log
+logs/

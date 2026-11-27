@@ -73,7 +73,7 @@ export default function AdminRoles() {
         api.get("/admin/students", {
           params: { status: "unclassified", limit: 100 },
         }),
-        api.get("/admin/students", { params: { limit: 200 } }),
+        api.get("/admin/students", { params: { limit: 100 } }),
         api.get("/admin/mentors"),
         api.get("/admin/overview"),
       ]);

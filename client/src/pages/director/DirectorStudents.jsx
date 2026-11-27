@@ -3,8 +3,6 @@ import { Link } from "react-router-dom";
 import {
   ArrowRight,
   Award,
-  CheckCircle2,
-  FolderKanban,
   GraduationCap,
   Mail,
   RefreshCw,
@@ -70,15 +68,18 @@ export default function DirectorStudents() {
     setError("");
 
     try {
-      const params = { page, limit: 20 };
+      const params = {
+        page,
+        limit: 20,
+        status: String(statusFilter || "all").trim().toLowerCase(),
+      };
       if (debouncedSearch) params.search = debouncedSearch;
-      if (statusFilter !== "all") params.status = statusFilter;
 
       const res = await api.get("/director/students", { params });
       const rawStudents = Array.isArray(res.data?.students) ? res.data.students : [];
       setStudents(rawStudents);
       setPagination({
-        total: Number(res.data?.pagination?.total) || 0,
+        total: Number(res.data?.totalMatching ?? res.data?.pagination?.total) || 0,
         totalPages: Math.max(1, Number(res.data?.pagination?.totalPages) || 1),
       });
     } catch (err) {
@@ -93,10 +94,6 @@ export default function DirectorStudents() {
   useEffect(() => {
     loadStudents();
   }, [loadStudents]);
-
-  const totalStudentsCount = pagination.total;
-  const activeCount = students.filter((s) => s.isActive || s.is_active).length;
-  const withProjectsCount = students.filter((s) => (s.projectCount || 0) > 0).length;
 
   return (
     <div className="space-y-6 text-neutral-950 dark:text-white">
@@ -114,6 +111,9 @@ export default function DirectorStudents() {
           <p className="mt-1 text-xs leading-relaxed text-neutral-600 dark:text-neutral-400 sm:text-sm">
             Institutional overview of all engineering students, assigned projects, faculty mentors, and milestones.
           </p>
+          <p className="mt-1 text-sm tabular-nums text-neutral-600 dark:text-neutral-400">
+            {pagination.total} matching
+          </p>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -130,57 +130,6 @@ export default function DirectorStudents() {
       </div>
 
       <ErrorAlert message={error} onDismiss={() => setError("")} />
-
-      {/* KPI Highlights */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-black/10 bg-white p-4 shadow-2xs dark:border-white/10 dark:bg-[#08080A]">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-neutral-100 text-neutral-900 dark:border-white/10 dark:bg-[#101014] dark:text-white">
-              <GraduationCap size={18} strokeWidth={1.85} />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                Total Students Enrolled
-              </p>
-              <p className="text-xl font-extrabold tabular-nums text-neutral-950 dark:text-white">
-                {totalStudentsCount}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-black/10 bg-white p-4 shadow-2xs dark:border-white/10 dark:bg-[#08080A]">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-neutral-100 text-neutral-900 dark:border-white/10 dark:bg-[#101014] dark:text-white">
-              <FolderKanban size={18} strokeWidth={1.85} />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                Engaged in Projects
-              </p>
-              <p className="text-xl font-extrabold tabular-nums text-neutral-950 dark:text-white">
-                {withProjectsCount} <span className="text-xs font-normal text-neutral-500">on this page</span>
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-black/10 bg-white p-4 shadow-2xs dark:border-white/10 dark:bg-[#08080A]">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-neutral-100 text-neutral-900 dark:border-white/10 dark:bg-[#101014] dark:text-white">
-              <CheckCircle2 size={18} strokeWidth={1.85} />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                Active Institutional Accounts
-              </p>
-              <p className="text-xl font-extrabold tabular-nums text-neutral-950 dark:text-white">
-                {activeCount} <span className="text-xs font-normal text-neutral-500">active</span>
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Search & Filter Toolbar */}
       <div className="flex flex-col gap-3 rounded-2xl border border-black/10 bg-white p-4 shadow-2xs dark:border-white/10 dark:bg-[#08080A] sm:flex-row sm:items-center sm:justify-between">

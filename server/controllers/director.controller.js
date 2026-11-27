@@ -2,6 +2,8 @@ import pool from "../config/db.js";
 import { parsePositiveInt, escapeLikePattern } from "../utils/formatters.js";
 import { readCache, aggregateCache } from "../utils/microCache.js";
 
+const ALLOWED_DIRECTOR_STUDENT_STATUSES = new Set(["all", "active", "inactive"]);
+
 const parseCohortFromEmail = (email) => {
     const local = String(email || "").split("@")[0].toLowerCase();
     const match = local.match(/^(\d{2})etc([a-z]{2})/i);
@@ -1182,14 +1184,21 @@ export const getDirectorStudentById = async (req, res, next) => {
 export const getDirectorStudents = async (req, res, next) => {
     try {
         const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
-        const statusFilter = String(req.query.status || "all").toLowerCase().trim();
+        const rawStatus = req.query.status !== undefined ? String(req.query.status).toLowerCase().trim() : "all";
+        if (!ALLOWED_DIRECTOR_STUDENT_STATUSES.has(rawStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid status filter. Allowed values: all, active, inactive.",
+            });
+        }
+        const statusFilter = rawStatus;
         const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
-        const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
         const offset = (page - 1) * limit;
 
         const cacheKey = `director:students:u:${req.user.id}:q:${search}:s:${statusFilter}:p:${page}:l:${limit}`;
         const result = await readCache.getOrSet(cacheKey, async () => {
-            const conditions = ["LOWER(COALESCE(u.role, 'student')) = 'student'"];
+            const conditions = ["LOWER(TRIM(COALESCE(u.role, 'student'))) = 'student'"];
             const params = [];
 
             if (search) {
@@ -1201,7 +1210,7 @@ export const getDirectorStudents = async (req, res, next) => {
             if (statusFilter === "active") {
                 conditions.push("u.is_active = TRUE");
             } else if (statusFilter === "inactive") {
-                conditions.push("u.is_active = FALSE");
+                conditions.push("(u.is_active = FALSE OR u.is_active IS NULL)");
             }
 
             const whereClause = conditions.join(" AND ");
@@ -1311,6 +1320,8 @@ export const getDirectorStudents = async (req, res, next) => {
                     department: parseCohortFromEmail(s.email).department,
                     cohort: parseCohortFromEmail(s.email),
                     phone: s.phone || "",
+                    isVerified: Boolean(s.is_verified),
+                    is_verified: Boolean(s.is_verified),
                     isActive: Boolean(s.is_active),
                     is_active: Boolean(s.is_active),
                     createdAt: s.created_at,
@@ -1342,6 +1353,7 @@ export const getDirectorStudents = async (req, res, next) => {
             success: true,
             readOnly: true,
             students: result.students,
+            totalMatching: result.total,
             pagination: {
                 total: result.total,
                 page: result.page,

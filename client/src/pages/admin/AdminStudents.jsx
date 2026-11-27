@@ -107,17 +107,20 @@ export default function AdminStudents() {
     setLoading(true);
     setError("");
     try {
-      const params = { page, limit: 25 };
+      const params = {
+        page,
+        limit: 25,
+        status: String(statusFilter || "all").trim().toLowerCase(),
+      };
       if (debouncedSearch) params.search = debouncedSearch;
       if (teamFilter) params.teamId = teamFilter;
-      if (statusFilter && statusFilter !== "all") params.status = statusFilter;
 
       const res = await api.get("/admin/students", { params });
       const rawStudents = Array.isArray(res.data?.students) ? res.data.students : [];
       const uniqueStudents = Array.from(new Map(rawStudents.map((s) => [s.id, s])).values());
       setStudents(uniqueStudents);
       setPagination({
-        total: Number(res.data?.pagination?.total) || 0,
+        total: Number(res.data?.totalMatching ?? res.data?.pagination?.total) || 0,
         totalPages: Math.max(1, Number(res.data?.pagination?.totalPages) || 1),
       });
     } catch (err) {
@@ -252,7 +255,7 @@ export default function AdminStudents() {
             Student Management
           </h1>
           <p className="mt-1 text-sm tabular-nums text-neutral-600 dark:text-neutral-400">
-            {pagination.total} student account(s) across teams, mentors, and projects.
+            {pagination.total} matching
           </p>
         </div>
 
@@ -463,9 +466,6 @@ export default function AdminStudents() {
                           <NeutralStatusPill
                             label={s.is_active ? "Active" : "Inactive"}
                           />
-                          {!s.role_classified && (
-                            <NeutralStatusPill label="Unclassified" />
-                          )}
                         </div>
                       </td>
 
