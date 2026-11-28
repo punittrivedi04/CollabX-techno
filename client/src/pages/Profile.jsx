@@ -15,6 +15,10 @@ import {
   Shield,
   Calendar,
   GraduationCap,
+  KeyRound,
+  LockKeyhole,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 import api from "../services/api";
@@ -46,7 +50,7 @@ function formatDate(dateString) {
 }
 
 export default function Profile() {
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, changePassword } = useAuth();
 
   const effectiveRole = getEffectiveRole(user);
   const isStudent = effectiveRole === "student";
@@ -70,6 +74,16 @@ export default function Profile() {
   const [success, setSuccess] = useState("");
   const [error, setError] = useState("");
   const [initialData, setInitialData] = useState(null);
+
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [pwSuccess, setPwSuccess] = useState("");
+  const [pwError, setPwError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -298,6 +312,64 @@ export default function Profile() {
     }
   };
 
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (changingPassword) return;
+
+    setPwError("");
+    setPwSuccess("");
+
+    if (!currentPassword) {
+      setPwError("Please enter your current password.");
+      return;
+    }
+
+    if (!newPassword) {
+      setPwError("Please enter a new password.");
+      return;
+    }
+
+    if (newPassword !== newPassword.trim()) {
+      setPwError("New password cannot start or end with spaces.");
+      return;
+    }
+
+    if (newPassword.length < 8 || newPassword.length > 128) {
+      setPwError("New password must contain between 8 and 128 characters.");
+      return;
+    }
+
+    if (newPassword === currentPassword) {
+      setPwError("New password must be different from your current password.");
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setPwError("New password and confirmation do not match.");
+      return;
+    }
+
+    setChangingPassword(true);
+    try {
+      const res = await changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setShowCurrentPw(false);
+      setShowNewPw(false);
+      setShowConfirmPw(false);
+      setPwSuccess(res?.message || "Password changed successfully.");
+    } catch (err) {
+      setPwError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Failed to change password. Please try again.",
+      );
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   const hasChanges =
     Boolean(initialData) &&
     (name.trim() !== (initialData.name || "").trim() ||
@@ -500,6 +572,186 @@ export default function Profile() {
                     <Save size={16} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
                   )}
                   {saving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </form>
+
+            {/* Change Password Card (All Roles: Student, Mentor, Admin, Director) */}
+            <form
+              onSubmit={handleChangePassword}
+              className="rounded-[28px] border border-[#D4DFD7] dark:border-[#1F2C26] bg-[#FAFBF9] dark:bg-[#111815] p-6 shadow-2xs sm:p-8"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="flex items-center gap-2 text-base font-extrabold text-[#141A18] dark:text-slate-100">
+                    <KeyRound size={17} className="text-[#2E8B63] dark:text-[#4ADE80]" />
+                    Change Password
+                  </h3>
+                  <p className="mt-1 text-xs text-[#5C6B66] dark:text-[#94A89D]">
+                    Update your login password and invalidate older sessions across other devices.
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full border border-[#D4DFD7] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300">
+                  Min 8 chars
+                </span>
+              </div>
+
+              {pwSuccess && (
+                <div className="mt-5 flex items-center gap-3 rounded-2xl border border-[#2E8B63]/30 dark:border-[#22C55E]/40 bg-[#E3F3EB] dark:bg-[#13291E] p-3.5 text-xs font-semibold text-[#1E6B4B] dark:text-[#6EE7B7]">
+                  <CheckCircle2 size={16} className="shrink-0" />
+                  <span className="flex-1">{pwSuccess}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPwSuccess("")}
+                    className="cursor-pointer text-xs font-bold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {pwError && (
+                <div className="mt-5 flex items-center gap-3 rounded-2xl border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 p-3.5 text-xs font-medium text-red-600 dark:text-red-400">
+                  <AlertCircle size={16} className="shrink-0" />
+                  <span className="flex-1">{pwError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPwError("")}
+                    className="cursor-pointer text-xs font-bold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              <div className="mt-5 space-y-4">
+                <div>
+                  <label
+                    htmlFor="profile-current-password"
+                    className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300"
+                  >
+                    <LockKeyhole size={14} className="text-[#5C6B66] dark:text-[#94A89D]" />
+                    Current Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="profile-current-password"
+                      type={showCurrentPw ? "text" : "password"}
+                      value={currentPassword}
+                      onChange={(e) => {
+                        setCurrentPassword(e.target.value);
+                        if (pwError) setPwError("");
+                        if (pwSuccess) setPwSuccess("");
+                      }}
+                      autoComplete="current-password"
+                      maxLength={128}
+                      disabled={changingPassword}
+                      placeholder="Enter your current password"
+                      className="w-full rounded-2xl border border-[#D5E0D8] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-4 py-3 pr-11 text-sm font-medium text-[#141A18] dark:text-slate-100 shadow-2xs outline-none transition focus:border-[#2E8B63] dark:focus:border-[#22C55E] focus:ring-2 focus:ring-[#2E8B63]/15 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPw((v) => !v)}
+                      aria-label={showCurrentPw ? "Hide current password" : "Show current password"}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer rounded-lg p-1.5 text-[#5C6B66] transition hover:bg-[#EFF4F0] hover:text-[#141A18] dark:text-[#94A89D] dark:hover:bg-[#1A2520] dark:hover:text-slate-100"
+                    >
+                      {showCurrentPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="profile-new-password"
+                      className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300"
+                    >
+                      <KeyRound size={14} className="text-[#2E8B63] dark:text-[#4ADE80]" />
+                      New Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="profile-new-password"
+                        type={showNewPw ? "text" : "password"}
+                        value={newPassword}
+                        onChange={(e) => {
+                          setNewPassword(e.target.value);
+                          if (pwError) setPwError("");
+                          if (pwSuccess) setPwSuccess("");
+                        }}
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={128}
+                        disabled={changingPassword}
+                        placeholder="At least 8 characters"
+                        className="w-full rounded-2xl border border-[#D5E0D8] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-4 py-3 pr-11 text-sm font-medium text-[#141A18] dark:text-slate-100 shadow-2xs outline-none transition focus:border-[#2E8B63] dark:focus:border-[#22C55E] focus:ring-2 focus:ring-[#2E8B63]/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPw((v) => !v)}
+                        aria-label={showNewPw ? "Hide new password" : "Show new password"}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer rounded-lg p-1.5 text-[#5C6B66] transition hover:bg-[#EFF4F0] hover:text-[#141A18] dark:text-[#94A89D] dark:hover:bg-[#1A2520] dark:hover:text-slate-100"
+                      >
+                        {showNewPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="profile-confirm-password"
+                      className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#42504B] dark:text-slate-300"
+                    >
+                      <KeyRound size={14} className="text-[#2E8B63] dark:text-[#4ADE80]" />
+                      Confirm New Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="profile-confirm-password"
+                        type={showConfirmPw ? "text" : "password"}
+                        value={confirmNewPassword}
+                        onChange={(e) => {
+                          setConfirmNewPassword(e.target.value);
+                          if (pwError) setPwError("");
+                          if (pwSuccess) setPwSuccess("");
+                        }}
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={128}
+                        disabled={changingPassword}
+                        placeholder="Re-enter new password"
+                        className="w-full rounded-2xl border border-[#D5E0D8] dark:border-[#24322B] bg-white dark:bg-[#0C120F] px-4 py-3 pr-11 text-sm font-medium text-[#141A18] dark:text-slate-100 shadow-2xs outline-none transition focus:border-[#2E8B63] dark:focus:border-[#22C55E] focus:ring-2 focus:ring-[#2E8B63]/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPw((v) => !v)}
+                        aria-label={showConfirmPw ? "Hide confirm password" : "Show confirm password"}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer rounded-lg p-1.5 text-[#5C6B66] transition hover:bg-[#EFF4F0] hover:text-[#141A18] dark:text-[#94A89D] dark:hover:bg-[#1A2520] dark:hover:text-slate-100"
+                      >
+                        {showConfirmPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end border-t border-[#E4ECE6] dark:border-[#1F2C26] pt-5">
+                <button
+                  type="submit"
+                  disabled={
+                    changingPassword ||
+                    !currentPassword ||
+                    !newPassword ||
+                    !confirmNewPassword
+                  }
+                  className="inline-flex cursor-pointer items-center gap-2 rounded-full group bg-[#141A17] text-white transition-all duration-200 hover:bg-[#1E6B4B] hover:text-white dark:border dark:border-[#2E4237] dark:bg-[#1B2822] dark:text-slate-100 dark:hover:border-[#A3E635] dark:hover:bg-[#A3E635] dark:hover:text-[#090D0B] px-6 py-2.5 text-sm font-bold shadow-xs disabled:cursor-not-allowed disabled:bg-[#DCE5DF] dark:disabled:bg-[#1A2520] disabled:text-[#6B7B75] dark:disabled:text-[#687E73]"
+                >
+                  {changingPassword ? (
+                    <LoaderCircle size={16} className="animate-spin" />
+                  ) : (
+                    <KeyRound size={16} className="text-[#bce784] transition-colors duration-200 group-hover:text-white dark:group-hover:text-[#090D0B]" />
+                  )}
+                  {changingPassword ? "Updating Password..." : "Update Password"}
                 </button>
               </div>
             </form>

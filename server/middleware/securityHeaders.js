@@ -71,7 +71,7 @@ export const createCorsOptions = (getAllowedOrigins) => {
             return callback(new Error("Origin not allowed by CORS"));
         },
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token", "X-Requested-With"],
+        allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token", "x-socket-id", "X-Requested-With"],
         credentials: true,
         maxAge: 86400, // 24 hours
     };

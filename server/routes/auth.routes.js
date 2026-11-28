@@ -8,6 +8,7 @@ import {
     resetPassword,
     resendOtp,
     verifyOtp,
+    changePassword,
     getMe,
 } from "../controllers/auth.controller.js";
 import protect from "../middleware/auth.middleware.js";
@@ -16,6 +17,7 @@ import {
     loginRateLimiter,
     passwordResetRateLimiter,
     otpVerifyResendRateLimiter,
+    changePasswordRateLimiter,
 } from "../middleware/rateLimiter.js";
 import sanitizeAndValidate from "../middleware/sanitizeAndValidate.js";
 
@@ -31,6 +33,7 @@ router.post("/forgot-password", passwordResetRateLimiter, forgotPassword);
 router.post("/reset-password", passwordResetRateLimiter, resetPassword);
 router.post("/verify-otp", otpVerifyResendRateLimiter, verifyOtp);
 router.post("/resend-otp", otpVerifyResendRateLimiter, resendOtp);
+router.post("/change-password", protect, changePasswordRateLimiter, changePassword);
 router.get("/me", protect, getMe);
 
 export default router;

@@ -7,6 +7,13 @@
  * (email, roll_no) without altering valid business logic or legitimate values.
  */
 
+const PASSWORD_FIELD_NAMES = new Set([
+    "password",
+    "currentpassword",
+    "newpassword",
+    "confirmpassword",
+]);
+
 const URL_FIELD_NAMES = new Set([
     "githuburl",
     "github_url",
@@ -93,6 +100,12 @@ const deepSanitize = (target, errors = [], fieldPath = "") => {
 
             const currentPath = fieldPath ? `${fieldPath}.${key}` : key;
             const normalizedKey = key.toLowerCase().replace(/[-_]/g, "");
+
+            // 0. Preserve password characters verbatim (strip only null bytes, no trimming/regex mutation)
+            if (PASSWORD_FIELD_NAMES.has(normalizedKey) && typeof value === "string") {
+                sanitizedObj[key] = value.replace(/\0/g, "").replace(/\\u0000/g, "");
+                continue;
+            }
 
             // 1. URL validation for known deliverable fields
             if (URL_FIELD_NAMES.has(normalizedKey) && typeof value === "string" && value.trim()) {

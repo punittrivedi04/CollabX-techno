@@ -87,6 +87,18 @@ export class MicroCache {
     size() {
         return this.store.size;
     }
+
+    pruneExpired() {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, entry] of this.store.entries()) {
+            if (now > entry.expiresAt) {
+                this.store.delete(key);
+                removed += 1;
+            }
+        }
+        return removed;
+    }
 }
 
 // Primary read-endpoint micro cache (max 500 entries, 5s TTL)

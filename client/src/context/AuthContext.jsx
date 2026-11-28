@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
 import api from "../services/api";
-import { connectSocket, disconnectSocket } from "../services/socket";
+import { connectSocket, disconnectSocket, getSocket } from "../services/socket";
 
 const AuthContext = createContext(null);
 
@@ -136,6 +136,22 @@ export function AuthProvider({ children }) {
     return response.data;
   };
 
+  // Change password (authenticated user)
+  const changePassword = async (currentPassword, newPassword) => {
+    const activeSocketId = getSocket()?.id;
+    const response = await api.post(
+      "/auth/change-password",
+      { currentPassword, newPassword },
+      activeSocketId ? { headers: { "x-socket-id": activeSocketId } } : undefined,
+    );
+    const nextToken = response.data?.accessToken || response.data?.token;
+    if (nextToken) {
+      localStorage.setItem("collabx_token", nextToken);
+      connectSocket(nextToken);
+    }
+    return response.data;
+  };
+
   // Logout
   const logout = () => {
     const token = localStorage.getItem("collabx_token");
@@ -177,6 +193,7 @@ export function AuthProvider({ children }) {
         resendOtp,
         forgotPassword,
         resetPassword,
+        changePassword,
         saveSession,
         logout,
         updateUser,

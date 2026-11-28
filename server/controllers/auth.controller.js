@@ -27,6 +27,12 @@ const otpResendCooldownCache = new MicroCache({ maxEntries: 2000, ttlMs: OTP_RES
 const consumedOtpTokens = new MicroCache({ maxEntries: 2000, ttlMs: 3 * 60 * 1000 });
 const recentLoginNotifsCache = new MicroCache({ maxEntries: 2000, ttlMs: 6 * 60 * 60 * 1000 });
 
+const MAX_CHANGE_PW_ATTEMPTS = 5;
+const CHANGE_PW_LOCKOUT_MS = 15 * 60 * 1000;
+const changePwAttemptsCache = new MicroCache({ maxEntries: 1000, ttlMs: CHANGE_PW_LOCKOUT_MS });
+const changePwPruneTimer = setInterval(() => changePwAttemptsCache.pruneExpired(), 5 * 60 * 1000);
+if (changePwPruneTimer.unref) changePwPruneTimer.unref();
+
 const hashKey = (str) => crypto.createHash("sha256").update(String(str)).digest("hex").slice(0, 24);
 
 const createAccessToken = (userId) => {
@@ -1224,5 +1230,194 @@ export const getMe = async (req, res, next) => {
         });
     } catch (error) {
         next(error);
+    }
+};
+
+// ==========================================
+// 10. CHANGE PASSWORD (All Authenticated Roles: Student, Mentor, Admin, Director)
+// ==========================================
+export const changePassword = async (req, res, next) => {
+    const userId = parsePositiveInt(req.user?.id);
+    if (!userId) {
+        return res.status(401).json({
+            success: false,
+            message: "Authentication required",
+        });
+    }
+
+    const attemptKey = `chpw:${userId}`;
+    const existingAttempt = changePwAttemptsCache.get(attemptKey);
+    if (existingAttempt && existingAttempt.lockedUntil > Date.now()) {
+        const retryAfter = Math.max(1, Math.ceil((existingAttempt.lockedUntil - Date.now()) / 1000));
+        const retryMinutes = Math.max(1, Math.ceil(retryAfter / 60));
+        res.setHeader("Retry-After", retryAfter);
+        return res.status(429).json({
+            success: false,
+            code: "CHANGE_PASSWORD_LOCKED",
+            retryAfter,
+            message: `Too many incorrect current password attempts. Please try again in ${retryMinutes} minute(s).`,
+        });
+    }
+
+    const { currentPassword, newPassword } = pickAllowedFields(req.body, [
+        "currentPassword",
+        "newPassword",
+    ]);
+
+    if (
+        typeof currentPassword !== "string" ||
+        typeof newPassword !== "string" ||
+        !currentPassword ||
+        !newPassword ||
+        currentPassword.length > 128
+    ) {
+        return res.status(400).json({
+            success: false,
+            code: "VALIDATION_ERROR",
+            message: "Current password and new password are required.",
+        });
+    }
+
+    if (newPassword !== newPassword.trim()) {
+        return res.status(400).json({
+            success: false,
+            code: "VALIDATION_ERROR",
+            message: "New password cannot start or end with spaces.",
+        });
+    }
+
+    if (newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({
+            success: false,
+            code: "VALIDATION_ERROR",
+            message: "New password must contain between 8 and 128 characters.",
+        });
+    }
+
+    if (newPassword === currentPassword) {
+        return res.status(400).json({
+            success: false,
+            code: "SAME_PASSWORD",
+            message: "New password must be different from your current password.",
+        });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        const { rows } = await client.query(
+            `SELECT id, password_hash, is_active, is_verified
+             FROM users
+             WHERE id = $1
+             FOR UPDATE;`,
+            [userId]
+        );
+
+        if (rows.length === 0) {
+            await client.query("ROLLBACK");
+            return res.status(401).json({
+                success: false,
+                message: "Unable to verify account credentials.",
+            });
+        }
+
+        const user = rows[0];
+        if (user.is_verified === false || user.is_active === false) {
+            await client.query("ROLLBACK");
+            return res.status(403).json({
+                success: false,
+                message: "Account is not active or verified.",
+            });
+        }
+
+        const currentMatches = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!currentMatches) {
+            await client.query("ROLLBACK");
+            // Re-read latest cache entry after async bcrypt.compare to prevent concurrent increment loss
+            const latestAttempt = changePwAttemptsCache.get(attemptKey);
+            const nextCount = (latestAttempt?.count || 0) + 1;
+            const isLocked = nextCount >= MAX_CHANGE_PW_ATTEMPTS;
+            const lockedUntil = isLocked ? Date.now() + CHANGE_PW_LOCKOUT_MS : 0;
+
+            changePwAttemptsCache.set(
+                attemptKey,
+                { count: nextCount, lockedUntil },
+                CHANGE_PW_LOCKOUT_MS
+            );
+
+            if (isLocked) {
+                const retryAfter = Math.ceil(CHANGE_PW_LOCKOUT_MS / 1000);
+                res.setHeader("Retry-After", retryAfter);
+                return res.status(429).json({
+                    success: false,
+                    code: "CHANGE_PASSWORD_LOCKED",
+                    retryAfter,
+                    message: "Too many incorrect current password attempts. Please try again in 15 minutes.",
+                });
+            }
+
+            return res.status(401).json({
+                success: false,
+                code: "INVALID_CURRENT_PASSWORD",
+                message: "Current password is incorrect.",
+            });
+        }
+
+        changePwAttemptsCache.delete(attemptKey);
+        const newPasswordHash = await bcrypt.hash(newPassword, 12);
+
+        await client.query(
+            `UPDATE users
+             SET password_hash = $1,
+                 refresh_token_hash = NULL
+             WHERE id = $2;`,
+            [newPasswordHash, userId]
+        );
+
+        await client.query("COMMIT");
+
+        // Invalidate previous access tokens & refresh sessions while issuing a fresh access token for this session
+        revokeUserTokens(userId);
+        invalidateUserCache();
+
+        const io = req.app.get("io");
+        if (io) {
+            const currentSocketId =
+                typeof req.headers["x-socket-id"] === "string"
+                    ? req.headers["x-socket-id"].trim().slice(0, 64)
+                    : "";
+            try {
+                const userSockets = await io.in(`user:${userId}`).fetchSockets();
+                for (const sock of userSockets) {
+                    if (!currentSocketId || sock.id !== currentSocketId) {
+                        sock.disconnect(true);
+                    }
+                }
+            } catch {
+                // Non-blocking socket cleanup
+            }
+        }
+
+        res.setHeader("Cache-Control", "no-store");
+        res.clearCookie("refreshToken", {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+        });
+
+        const freshAccessToken = createAccessToken(userId);
+
+        return res.status(200).json({
+            success: true,
+            message: "Password changed successfully.",
+            token: freshAccessToken,
+            accessToken: freshAccessToken,
+        });
+    } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        next(error);
+    } finally {
+        client.release();
     }
 };

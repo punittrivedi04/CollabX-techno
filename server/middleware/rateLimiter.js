@@ -62,6 +62,8 @@ class SlidingWindowStore {
         const record = this.hits.get(key);
         if (record) {
             record.lockoutUntil = now + lockoutMs;
+            // Ensure the record isn't purged by recordHit/cleanup before lockoutUntil expires
+            record.resetTime = Math.max(record.resetTime, record.lockoutUntil);
         }
     }
 
@@ -186,6 +188,19 @@ export const otpVerifyResendRateLimiter = createRateLimiter({
 });
 
 /**
+ * 1e. CHANGE PASSWORD LIMITER
+ * Protects POST /api/auth/change-password: max 10 attempts per 15 minutes per IP.
+ */
+export const changePasswordRateLimiter = createRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: "Too many password change attempts. Please try again in 15 minutes.",
+    code: "TOO_MANY_PASSWORD_CHANGE_ATTEMPTS",
+    lockoutDurationMs: 15 * 60 * 1000,
+    keyGenerator: (req) => `chpw:${req.ip || getClientIp(req)}`,
+});
+
+/**
  * 2. WRITE / MUTATION LIMITER
  * Applied to POST, PUT, PATCH, DELETE operations.
  * Threshold: Max 60 requests per minute per authenticated user (or IP if unauthenticated).
@@ -213,6 +228,7 @@ export const mutationRateLimiter = (req, res, next) => {
         req.path.startsWith("/auth/reset-password") ||
         req.path.startsWith("/auth/verify-otp") ||
         req.path.startsWith("/auth/resend-otp") ||
+        req.path.startsWith("/auth/change-password") ||
         req.path === "/health"
     ) {
         return next();
@@ -251,6 +267,7 @@ export default {
     loginRateLimiter,
     passwordResetRateLimiter,
     otpVerifyResendRateLimiter,
+    changePasswordRateLimiter,
     mutationRateLimiter,
     globalRateLimiter,
 };
