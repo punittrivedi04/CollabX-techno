@@ -9,7 +9,15 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
-const { Pool } = pg;
+const { Pool, types } = pg;
+
+// Parse PostgreSQL TIMESTAMP WITHOUT TIME ZONE (OID 1114) strictly as UTC across all host timezones
+types.setTypeParser(1114, (str) => {
+    if (!str) return null;
+    if (str instanceof Date) return str;
+    const normalized = String(str).trim().replace(" ", "T");
+    return new Date(/(Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`);
+});
 
 // Optimized PostgreSQL pool tuned for campus concurrency & Supabase connection poolers
 // max: 20 pooled connections, 30s idle timeout, 10s query statement timeout to prevent hung locks

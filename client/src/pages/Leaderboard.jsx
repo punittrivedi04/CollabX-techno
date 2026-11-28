@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
   CheckCircle2,
@@ -85,6 +85,8 @@ export default function Leaderboard() {
   const [starsBreakdown, setStarsBreakdown] = useState(null);
   const [starsLoading, setStarsLoading] = useState(false);
   const [starsError, setStarsError] = useState("");
+  const inspectingProjectIdRef = useRef(null);
+  const breakdownSeqRef = useRef(0);
 
   // Submit / Manage Modal
   const [showSubmitModal, setShowSubmitModal] = useState(false);
@@ -92,28 +94,48 @@ export default function Leaderboard() {
   const [votingId, setVotingId] = useState(null);
 
   const fetchStarsBreakdown = useCallback(async (project) => {
-    if (!project?.id) return;
+    const projectId = project?.id;
+    if (!projectId) return;
+    const reqId = ++breakdownSeqRef.current;
     setStarsLoading(true);
     setStarsError("");
     try {
-      const res = await api.get(`/leaderboard/projects/${project.id}/stars`);
+      const res = await api.get(`/leaderboard/projects/${projectId}/stars`);
+      if (
+        reqId !== breakdownSeqRef.current ||
+        String(inspectingProjectIdRef.current) !== String(projectId)
+      ) {
+        return;
+      }
       setStarsBreakdown(res.data);
     } catch (err) {
+      if (
+        reqId !== breakdownSeqRef.current ||
+        String(inspectingProjectIdRef.current) !== String(projectId)
+      ) {
+        return;
+      }
       setStarsError(getErrorMessage(err, "Failed to load star endorsements."));
     } finally {
-      setStarsLoading(false);
+      if (reqId === breakdownSeqRef.current) {
+        setStarsLoading(false);
+      }
     }
   }, []);
 
   const openStarsBreakdown = (project) => {
+    inspectingProjectIdRef.current = project?.id ?? null;
     setInspectingStarsProject(project);
     fetchStarsBreakdown(project);
   };
 
   const closeStarsBreakdown = () => {
+    inspectingProjectIdRef.current = null;
+    breakdownSeqRef.current += 1;
     setInspectingStarsProject(null);
     setStarsBreakdown(null);
     setStarsError("");
+    setStarsLoading(false);
   };
 
   const loadLeaderboard = useCallback(async (bg = false) => {
@@ -161,6 +183,18 @@ export default function Leaderboard() {
     }
   }, [projects, selectedProject?.id]);
 
+  useEffect(() => {
+    inspectingProjectIdRef.current = inspectingStarsProject?.id ?? null;
+  }, [inspectingStarsProject?.id]);
+
+  const activeInspectingProject = useMemo(() => {
+    if (!inspectingStarsProject) return null;
+    const live = projects.find(
+      (p) => String(p.id) === String(inspectingStarsProject.id),
+    );
+    return live ? { ...inspectingStarsProject, ...live } : inspectingStarsProject;
+  }, [inspectingStarsProject, projects]);
+
   const filteredProjects = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return projects;
@@ -192,24 +226,53 @@ export default function Leaderboard() {
     const socket = getSocket();
     if (!socket) return;
 
-    const handleStarUpdate = ({ projectId, starCount }) => {
+    const handleStarUpdate = ({ projectId, starCount, userId: eventUserId, starred }) => {
+      const nextCount = Number(starCount) || 0;
+      const isSelfEvent =
+        eventUserId !== undefined &&
+        eventUserId !== null &&
+        user?.id !== undefined &&
+        user?.id !== null &&
+        String(eventUserId) === String(user.id);
+
+      const resolveNextStarred = (prevStarred) => {
+        if (nextCount === 0) return false;
+        if (isSelfEvent && typeof starred === "boolean") return starred;
+        return prevStarred;
+      };
+
       setProjects((prev) => {
         const next = prev.map((p) =>
           String(p.id) === String(projectId)
-            ? { ...p, starCount: Number(starCount) }
+            ? {
+                ...p,
+                starCount: nextCount,
+                isStarred: resolveNextStarred(p.isStarred),
+              }
             : p,
         );
         return rankProjects(next);
       });
       setSelectedProject((prev) => {
         if (prev && String(prev.id) === String(projectId)) {
-          return { ...prev, starCount: Number(starCount) };
+          return {
+            ...prev,
+            starCount: nextCount,
+            isStarred: resolveNextStarred(prev.isStarred),
+          };
         }
         return prev;
       });
+      if (String(inspectingProjectIdRef.current) === String(projectId)) {
+        fetchStarsBreakdown({ id: projectId });
+      }
       setInspectingStarsProject((prev) => {
         if (prev && String(prev.id) === String(projectId)) {
-          fetchStarsBreakdown(prev);
+          return {
+            ...prev,
+            starCount: nextCount,
+            isStarred: resolveNextStarred(prev.isStarred),
+          };
         }
         return prev;
       });
@@ -227,9 +290,14 @@ export default function Leaderboard() {
       setSelectedProject((prev) =>
         prev && String(prev.id) === String(projectId) ? null : prev,
       );
-      setInspectingStarsProject((prev) =>
-        prev && String(prev.id) === String(projectId) ? null : prev,
-      );
+      setInspectingStarsProject((prev) => {
+        if (prev && String(prev.id) === String(projectId)) {
+          inspectingProjectIdRef.current = null;
+          breakdownSeqRef.current += 1;
+          return null;
+        }
+        return prev;
+      });
     };
 
     socket.on("leaderboard:star_update", handleStarUpdate);
@@ -241,7 +309,7 @@ export default function Leaderboard() {
       socket.off("leaderboard:new_project", handleNewProject);
       socket.off("leaderboard:project_withdrawn", handleProjectWithdrawn);
     };
-  }, [fetchStarsBreakdown, loadLeaderboard]);
+  }, [fetchStarsBreakdown, loadLeaderboard, user?.id]);
 
   const handleToggleStar = async (projectId) => {
     if (votingId) return;
@@ -291,6 +359,7 @@ export default function Leaderboard() {
         }));
       }
       if (
+        !getSocket()?.connected &&
         inspectingStarsProject &&
         String(inspectingStarsProject.id) === String(projectId)
       ) {
@@ -1143,13 +1212,13 @@ export default function Leaderboard() {
 
       {/* CATEGORIZED STAR VIEW PANEL */}
       <Modal
-        open={Boolean(inspectingStarsProject)}
+        open={Boolean(activeInspectingProject)}
         onClose={closeStarsBreakdown}
         title={
-          inspectingStarsProject ? (
+          activeInspectingProject ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-black">
-                Star Endorsements: {inspectingStarsProject.title}
+                Star Endorsements: {activeInspectingProject.title}
               </span>
               <NeutralBadge className="border-amber-500/40 bg-amber-500/12 text-amber-800 dark:border-amber-400/35 dark:bg-amber-400/12 dark:text-amber-300">
                 <Star
@@ -1159,7 +1228,7 @@ export default function Leaderboard() {
                 />
                 <span>
                   {starsBreakdown?.totalStars ??
-                    inspectingStarsProject.starCount ??
+                    activeInspectingProject.starCount ??
                     0}{" "}
                   Total
                 </span>
@@ -1352,11 +1421,11 @@ export default function Leaderboard() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {inspectingStarsProject && (
+                {activeInspectingProject && (
                   <button
                     type="button"
-                    onClick={() => handleToggleStar(inspectingStarsProject.id)}
-                    disabled={votingId === inspectingStarsProject.id}
+                    onClick={() => handleToggleStar(activeInspectingProject.id)}
+                    disabled={votingId === activeInspectingProject.id}
                     className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 text-xs font-bold transition ${
                       starsBreakdown?.currentUserStarred
                         ? "border-amber-500/60 bg-amber-500/15 text-amber-800 dark:border-amber-400/50 dark:bg-amber-400/15 dark:text-amber-300"

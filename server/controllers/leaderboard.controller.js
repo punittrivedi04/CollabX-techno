@@ -4,6 +4,18 @@ import { readCache, aggregateCache, invalidateAllCaches } from "../utils/microCa
 import logActivity from "../utils/activityLogger.js";
 import { isDirector } from "../middleware/directorGuard.js";
 
+const toIsoTimestamp = (val) => {
+    if (!val) return null;
+    if (val instanceof Date) return Number.isNaN(val.getTime()) ? null : val.toISOString();
+    const s = String(val).trim();
+    const parsed = new Date(
+        s.includes("T") || /(Z|[+-]\d{2}:?\d{2})$/i.test(s)
+            ? s
+            : `${s.replace(" ", "T")}Z`
+    );
+    return Number.isNaN(parsed.getTime()) ? val : parsed.toISOString();
+};
+
 /**
  * 1. GET /api/leaderboard
  * Fetches all projects that are 100% completed AND opted-in to the Leaderboard
@@ -139,8 +151,8 @@ export const getLeaderboard = async (req, res, next) => {
                     pptUrl: p.ppt_url || "",
                     demoUrl: p.demo_url || "",
                     githubUrl: p.github_url || "",
-                    submittedAt: p.leaderboard_submitted_at || p.created_at,
-                    createdAt: p.created_at,
+                    submittedAt: toIsoTimestamp(p.leaderboard_submitted_at || p.created_at),
+                    createdAt: toIsoTimestamp(p.created_at),
                     starCount: Number(p.star_count || 0),
                     isStarred: Boolean(p.is_starred),
                     teamLeader,
@@ -223,24 +235,21 @@ export const toggleProjectStar = async (req, res, next) => {
             });
         }
 
-        // Check if user already starred
-        const { rows: existingVote } = await pool.query(
-            "SELECT id FROM project_stars WHERE project_id = $1 AND user_id = $2;",
+        // Atomic star toggle: delete existing vote first; only insert if no row existed
+        const deletedVote = await pool.query(
+            "DELETE FROM project_stars WHERE project_id = $1 AND user_id = $2 RETURNING id;",
             [projectId, userId]
         );
 
         let isStarred;
-        if (existingVote.length > 0) {
-            await pool.query("DELETE FROM project_stars WHERE project_id = $1 AND user_id = $2;", [
-                projectId,
-                userId,
-            ]);
+        if (deletedVote.rowCount > 0) {
             isStarred = false;
         } else {
             await pool.query(
                 `INSERT INTO project_stars (project_id, user_id, created_at)
                  VALUES ($1, $2, NOW())
-                 ON CONFLICT (project_id, user_id) DO NOTHING;`,
+                 ON CONFLICT (project_id, user_id) DO NOTHING
+                 RETURNING id;`,
                 [projectId, userId]
             );
             isStarred = true;
@@ -260,6 +269,7 @@ export const toggleProjectStar = async (req, res, next) => {
                 projectId,
                 starCount,
                 userId,
+                starred: isStarred,
             });
         }
 
@@ -416,7 +426,7 @@ export const submitToLeaderboard = async (req, res, next) => {
             io.emit("leaderboard:new_project", {
                 projectId,
                 title: project.title,
-                leaderboardSubmittedAt: updated.leaderboard_submitted_at,
+                leaderboardSubmittedAt: toIsoTimestamp(updated.leaderboard_submitted_at),
             });
             io.emit("leaderboard:star_update", {
                 projectId,
@@ -696,7 +706,7 @@ export const getProjectStarsBreakdown = async (req, res, next) => {
                     ? "Administrator"
                     : "Student",
                 rollNo: voter.roll_no || "",
-                starredAt: voter.starred_at,
+                starredAt: toIsoTimestamp(voter.starred_at),
                 isCurrentUser: Boolean(isCurrent),
             };
 
